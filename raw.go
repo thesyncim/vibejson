@@ -1,6 +1,8 @@
 package vibejson
 
 import (
+	"encoding/binary"
+	"math/bits"
 	"strconv"
 
 	"github.com/thesyncim/vibejson/document"
@@ -317,7 +319,10 @@ type rawSeeker struct {
 }
 
 func (s *rawSeeker) skipSpace() {
-	s.i = SkipSpace(s.src, s.i)
+	if uint(s.i) < uint(len(s.src)) && s.src[s.i] > ' ' {
+		return
+	}
+	s.i = skipSpaceFast(s.src, s.i)
 }
 
 func (s *rawSeeker) captureValue(depth int) (RawValue, bool, error) {
@@ -676,6 +681,17 @@ func (s *rawSeeker) keyMatches(token string, keyStart, keyEnd int, escaped bool)
 func (s *rawSeeker) parseStringRaw() (start, end int, escaped bool, err error) {
 	s.i++
 	start = s.i
+	if start+8 <= len(s.src) {
+		word := binary.LittleEndian.Uint64(s.src[start : start+8])
+		if m := stringSpecialMask(word); m != 0 {
+			off := bits.TrailingZeros64(m) >> 3
+			if byte(word>>(uint(off)*8)) == '"' {
+				end = start + off
+				s.i = end + 1
+				return start, end, false, nil
+			}
+		}
+	}
 	for {
 		j := scanStringSpecial(s.src, s.i)
 		if j >= len(s.src) {
@@ -712,6 +728,17 @@ func (s *rawSeeker) parseStringRaw() (start, end int, escaped bool, err error) {
 }
 
 func (s *rawSeeker) skipValue(depth int) error {
+	if s.maxDepth == DefaultMaxDepth && uint(s.i) < uint(len(s.src)) {
+		if end, ok := validValueFast(s.src, s.i, s.src[s.i], depth); ok {
+			s.i = end
+			return nil
+		}
+	}
+	return s.skipValueSlow(depth)
+}
+
+//go:noinline
+func (s *rawSeeker) skipValueSlow(depth int) error {
 	v := validator{src: s.src, i: s.i, maxDepth: s.maxDepth}
 	if err := v.parseValue(depth); err != nil {
 		return err
