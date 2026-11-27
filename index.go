@@ -5,6 +5,7 @@ import (
 	"math/bits"
 
 	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/x/scanner"
 )
 
 // The structural index is a fixed-width tape over validated source bytes.
@@ -325,7 +326,48 @@ value:
 		}
 		start := i
 		scanStart := i + 1
-		if scanStart+8 <= n {
+		if scanStart+16 <= n {
+			w0 := src[scanStart : scanStart+8]
+			if m0 := stringSpecialMask(binary.LittleEndian.Uint64(w0)); m0 != 0 {
+				off := uint(bits.TrailingZeros64(m0)) >> 3
+				j := scanStart + off
+				if w0[off] == '"' {
+					entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: packInfo(0, document.String, 0)}
+					entIdx++
+					i = j + 1
+					goto scopeEnd
+				}
+				scanStart = j
+			} else {
+				w1 := src[scanStart+8 : scanStart+16]
+				if m1 := stringSpecialMask(binary.LittleEndian.Uint64(w1)); m1 != 0 {
+					off := uint(bits.TrailingZeros64(m1)) >> 3
+					j := scanStart + 8 + off
+					if w1[off] == '"' {
+						entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(j + 1), Next: 1, Info: packInfo(0, document.String, 0)}
+						entIdx++
+						i = j + 1
+						goto scopeEnd
+					}
+					scanStart = j
+				} else {
+					scanStart += 16
+					var endIdx int
+					if n-scanStart >= 32 {
+						endIdx = scanner.IndexStringSpecialLong(src, int(scanStart))
+					} else {
+						endIdx = scanStringSpecial(src, int(scanStart))
+					}
+					if uint(endIdx) < n && src[uint(endIdx)] == '"' {
+						entries[entIdx] = IndexEntry{Start: uint32(start), End: uint32(endIdx + 1), Next: 1, Info: packInfo(0, document.String, 0)}
+						entIdx++
+						i = uint(endIdx + 1)
+						goto scopeEnd
+					}
+					scanStart = uint(endIdx)
+				}
+			}
+		} else if scanStart+8 <= n {
 			w := src[scanStart : scanStart+8]
 			if m := stringSpecialMask(binary.LittleEndian.Uint64(w)); m != 0 {
 				off := uint(bits.TrailingZeros64(m)) >> 3

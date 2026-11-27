@@ -525,6 +525,78 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 			fieldBase = resolved
 		}
 		fieldDst := unsafe.Add(fieldBase, field.offset)
+		// Inline fast paths for common scalar fields (bool, int64, clean
+		// structural string) before the generated dispatch.
+		switch field.op {
+		case typedOpBool:
+			src := cursor.src
+			if i := uint(cursor.i); i+4 <= uint(len(src)) {
+				if binary.LittleEndian.Uint32(src[i:i+4]) == wordTrueLE {
+					*(*bool)(fieldDst) = true
+					cursor.i = int(i + 4)
+					continue
+				}
+				if i+5 <= uint(len(src)) && src[i] == 'f' && binary.LittleEndian.Uint32(src[i+1:i+5]) == wordAlseLE {
+					*(*bool)(fieldDst) = false
+					cursor.i = int(i + 5)
+					continue
+				}
+			}
+		case typedOpInt64:
+			src := cursor.src
+			n := uint(len(src))
+			if i := uint(cursor.i); i < n {
+				c0 := src[i]
+				if c0 == '0' {
+					if i+1 < n && (src[i+1] == ',' || src[i+1] == '}' || src[i+1] <= ' ') {
+						*(*int64)(fieldDst) = 0
+						cursor.i = int(i + 1)
+						continue
+					}
+				} else if c0 >= '1' && c0 <= '9' {
+					u := int64(c0 - '0')
+					j := i + 1
+					limit := i + 18
+					if limit > n {
+						limit = n
+					}
+					for j < limit {
+						d := src[j] - '0'
+						if d > 9 {
+							break
+						}
+						u = u*10 + int64(d)
+						j++
+					}
+					if j < n && (src[j] == ',' || src[j] == '}' || src[j] <= ' ') {
+						*(*int64)(fieldDst) = u
+						cursor.i = int(j)
+						continue
+					}
+				}
+			}
+		case typedOpString:
+			src := cursor.src
+			i := cursor.i
+			tape := &cursor.state.structural
+			token := tape.index
+			positions := tape.positions
+			if i < len(src) && src[i] == '"' && uint(token+1) < uint(len(positions)) && int(positions[token]) == i {
+				end := int(positions[token+1])
+				if end < len(src) && src[end] == '"' &&
+					(!tape.nonASCII && !tape.escaped || cursor.structuralStringLocallyDirect(i+1, end)) {
+					tape.index = token + 1
+					sDst := (*string)(fieldDst)
+					if cursor.flags&decoderZeroCopy != 0 {
+						*sDst = byteview.String(src[i+1 : end])
+					} else if !cursor.reuseOwnedString(*sDst, i+1, end) {
+						*sDst = cursor.ownedString(i+1, end)
+					}
+					cursor.i = end + 1
+					continue
+				}
+			}
+		}
 		var fieldErr error
 		switch field.op {
 		// BEGIN GENERATED TYPED STRUCTURAL FIELD DISPATCH

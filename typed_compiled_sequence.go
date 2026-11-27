@@ -57,7 +57,27 @@ func (cursor *decoderCursor) decodeCompiledSlice(node *typedNode, dst unsafe.Poi
 		return cursor.decodeCompiledSliceReceivers(node, dst, &header)
 	}
 	for index, first := 0, true; ; index, first = index+1, false {
-		more, err := cursor.NextArrayElement(first)
+		var more bool
+		var err error
+		if !first {
+			src := cursor.src
+			if i := cursor.i; i < len(src) {
+				switch src[i] {
+				case ',':
+					if i+1 < len(src) && src[i+1] > ' ' {
+						cursor.i = i + 1
+						more = true
+						goto gotElem
+					}
+				case ']':
+					cursor.i = i + 1
+					cursor.depth--
+					goto gotElem
+				}
+			}
+		}
+		more, err = cursor.NextArrayElement(first)
+	gotElem:
 		if err != nil {
 			return err
 		}
@@ -111,7 +131,27 @@ func (cursor *decoderCursor) decodeCompiledSlice(node *typedNode, dst unsafe.Poi
 // ordinary compiled slice loop byte-for-byte free of receiver-arena branches.
 func (cursor *decoderCursor) decodeCompiledSliceReceivers(node *typedNode, dst unsafe.Pointer, header *typedSliceState) error {
 	for index, first := 0, true; ; index, first = index+1, false {
-		more, err := cursor.NextArrayElement(first)
+		var more bool
+		var err error
+		if !first {
+			src := cursor.src
+			if i := cursor.i; i < len(src) {
+				switch src[i] {
+				case ',':
+					if i+1 < len(src) && src[i+1] > ' ' {
+						cursor.i = i + 1
+						more = true
+						goto gotElem
+					}
+				case ']':
+					cursor.i = i + 1
+					cursor.depth--
+					goto gotElem
+				}
+			}
+		}
+		more, err = cursor.NextArrayElement(first)
+	gotElem:
 		if err != nil {
 			return err
 		}
@@ -280,6 +320,10 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 	f4Field := &elem.fields[4]
 	inlineFast := f4Field.node.length == 3 && f4Field.node.elem.op == typedOpFloat64 && cursor.depth+1 < cursor.maxDepth
 	shuffledSlow := false
+	// Stack-local 1-slot caches for owned-mode string fields (pointing into
+	// cursor.strings' pointer-free slab) to avoid copying identical repeated
+	// strings across records.
+	var lastS2, lastS3 string
 	token := tape.index
 	i := uint(cursor.i)
 	for index := 0; ; index++ {
@@ -577,10 +621,26 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			} else {
 				n2 := int(s2End - s2Start - 1)
 				n3 := int(s3End - s3Start - 1)
-				need := n2 + n3
+				hit2 := n2 == 0 || (len(lastS2) == n2 && lastS2 == byteview.String(src[s2Start+1:s2End]))
+				hit3 := n3 == 0 || (len(lastS3) == n3 && lastS3 == byteview.String(src[s3Start+1:s3End]))
+				need := 0
+				if !hit2 {
+					need += n2
+				}
+				if !hit3 {
+					need += n3
+				}
 				if need == 0 {
-					*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ""
-					*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
+					if n2 == 0 {
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ""
+					} else {
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = lastS2
+					}
+					if n3 == 0 {
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
+					} else {
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = lastS3
+					}
 				} else {
 					if cap(cursor.strings)-len(cursor.strings) < need {
 						cursor.i = int(s2Start)
@@ -589,17 +649,25 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 					off := len(cursor.strings)
 					dstBuf := cursor.strings[off : off+need]
 					cursor.strings = cursor.strings[:off+need]
+					posBuf := 0
 					if n2 == 0 {
 						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ""
+					} else if hit2 {
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = lastS2
 					} else {
 						copy(dstBuf[:n2], src[s2Start+1:s2End])
-						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = ownedBytesString(dstBuf[:n2])
+						lastS2 = ownedBytesString(dstBuf[:n2])
+						*(*string)(unsafe.Add(elemPtr, f2Field.offset)) = lastS2
+						posBuf = n2
 					}
 					if n3 == 0 {
 						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ""
+					} else if hit3 {
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = lastS3
 					} else {
-						copy(dstBuf[n2:], src[s3Start+1:s3End])
-						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = ownedBytesString(dstBuf[n2:])
+						copy(dstBuf[posBuf:], src[s3Start+1:s3End])
+						lastS3 = ownedBytesString(dstBuf[posBuf:])
+						*(*string)(unsafe.Add(elemPtr, f3Field.offset)) = lastS3
 					}
 				}
 			}
@@ -613,16 +681,74 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 		}
 
 	slowRecord:
+		if shuffledSlow {
+			// The record's keys do not follow struct field order; decode this
+			// record and the remainder of the slice directly via the lean
+			// cursor loop, then re-sync the structural tape once at array end.
+			cursor.i = int(openPos)
+			for ; ; index++ {
+				if index == header.cap {
+					capacity := nextTypedSliceCapacity(header.cap, index+1)
+					if header.cap == 0 && cursor.depth <= 3 {
+						if estimate := (len(src) - cursor.i) / 128; estimate > capacity {
+							capacity = estimate
+							if capacity > 1024 {
+								capacity = 1024
+							}
+						}
+					}
+					header.grow(capacity)
+				}
+				header.setLen(index + 1)
+				if err := cursor.decodeCompiledStruct(elem, header.elementAt(index, elemSize)); err != nil {
+					return prependDecodePathIndex(err, index)
+				}
+				var more bool
+				var err error
+				if ci := cursor.i; ci < len(src) {
+					switch src[ci] {
+					case ',':
+						if ci+1 < len(src) && src[ci+1] > ' ' {
+							cursor.i = ci + 1
+							more = true
+							goto nextShuffled
+						}
+					case ']':
+						cursor.i = ci + 1
+						cursor.depth--
+						goto nextShuffled
+					}
+				}
+				more, err = cursor.NextArrayElement(false)
+			nextShuffled:
+				if err != nil {
+					return err
+				}
+				if !more {
+					// Binary-search tape.positions to re-sync tape.index to cursor.i.
+					lo, hi := recToken, len(positions)
+					target := uint32(cursor.i)
+					for lo < hi {
+						mid := int(uint(lo+hi) >> 1)
+						if positions[mid] < target {
+							lo = mid + 1
+						} else {
+							hi = mid
+						}
+					}
+					if lo > 0 {
+						tape.index = lo - 1
+					} else {
+						tape.index = 0
+					}
+					return nil
+				}
+			}
+		}
 		tape.index = recToken
 		cursor.i = int(openPos) + 1
 		cursor.depth++
-		var recErr error
-		if shuffledSlow {
-			recErr = cursor.decodeCompiledStructStructuralSlow(elem, elemPtr, 0, true, 0)
-		} else {
-			recErr = cursor.decodeCompiledStructStructuralRecord(elem, elemPtr)
-		}
-		if recErr != nil {
+		if recErr := cursor.decodeCompiledStructStructuralRecord(elem, elemPtr); recErr != nil {
 			header.setLen(index + 1)
 			return prependDecodePathIndex(recErr, index)
 		}

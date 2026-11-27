@@ -68,8 +68,12 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 	total := 0
 	keyTotal := 0
 	beforeStr := 0
+	strStart := 0
 	dedupeKeys := len(src) > 256
 	const keyBudget = 2048
+	// Mirror anyScalarCache's 32 slots with stack-only 64-bit fingerprints so
+	// repeated clean string values do not over-reserve dead arena slack.
+	var seenVal [32]uint64
 	fastStrings := useAnyDelimiterSearch(src)
 	for i := 0; i < len(src); {
 		escaped := false
@@ -92,6 +96,7 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 			continue
 		}
 		i++
+		strStart = i
 		beforeStr = total
 		for i < len(src) {
 			if fastStrings && !escaped {
@@ -106,6 +111,7 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 			}
 			switch src[i] {
 			case '"':
+				strEnd := i
 				i++
 				if dedupeKeys && !escaped {
 					j := i
@@ -118,6 +124,21 @@ func ownedAnyStringCapacity(src []byte, useNumber bool) int {
 							total = beforeStr
 						} else {
 							keyTotal += strLen
+						}
+					} else if strLen := strEnd - strStart; strLen > 0 && strLen <= 128 {
+						raw := src[strStart:strEnd]
+						slot := (uint(raw[0]) ^ uint(raw[strLen-1])*31 ^ uint(strLen)*17) & 31
+						fp := uint64(strLen)<<48 | uint64(raw[0])<<40 | uint64(raw[strLen>>1])<<32 | uint64(raw[strLen-1])<<24
+						if strLen >= 8 {
+							fp ^= binary.LittleEndian.Uint64(raw[:8]) ^ binary.LittleEndian.Uint64(raw[strLen-8:])
+						}
+						if fp == 0 {
+							fp = 1
+						}
+						if seenVal[slot] == fp {
+							total = beforeStr
+						} else {
+							seenVal[slot] = fp
 						}
 					}
 				}

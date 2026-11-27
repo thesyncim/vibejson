@@ -39,27 +39,30 @@ const (
 
 // decoderCursor is the concrete, interface-free parser used by compiled typed
 // decoders. Its generic scalar methods are specialized by destination width.
+// Pointer-bearing fields are grouped at the front to minimize GC ptrdata.
 type decoderCursor struct {
-	src      []byte
+	src []byte
+	// strings is the current pointer-free (noscan) owned-string slab.
+	strings []byte
+	// state carries uncommon per-decode storage.
+	state    *decoderState
 	i        int
 	maxDepth int32
 	depth    int32
 	flags    decoderFlags
 	// floatLong skips a short-form probe for uniformly long float arrays.
 	floatLong bool
-	// strings is the current pointer-free (noscan) owned-string slab.
-	strings []byte
-	// state carries uncommon per-decode storage.
-	state *decoderState
 }
 
 // decoderState carries structural and Replace-mode state.
+// Pointer-bearing fields are grouped before the 512-byte pointer-free
+// stringWindows array so GC ptrdata is 24 bytes instead of 584 bytes.
 type decoderState struct {
-	structural         decoderStructuralTape
-	structuralActive   bool
 	operation          *decoderOperationState
 	replaceDestination unsafe.Pointer
+	structural         decoderStructuralTape
 	replaceSpan        uint32
+	structuralActive   bool
 }
 
 // newDecoderCursor starts decoding src with opts.

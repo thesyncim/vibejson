@@ -342,25 +342,26 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 		start := len(dst)
 		buf := dst[start:cap(dst)]
 		pos := 0
-		buf[pos] = '['
-		pos++
 		fastOK := true
 		for index := 0; index < node.length; index++ {
 			out := buf[pos : pos+16]
 			_ = out[15]
-			k := 0
-			if index > 0 {
-				out[0] = ','
-				k = 1
-			}
+			out[0] = ','
+			k := 1
 			v := *(*float64)(unsafe.Add(src, uintptr(index)*8))
-			positive := math.Abs(v)
+			neg := v < 0
+			positive := v
+			if neg {
+				positive = -v
+			} else if v == 0 && math.Signbit(v) {
+				neg = true
+			}
 			if positive < 1e6 {
-				if math.Trunc(v) == v {
+				if math.Trunc(positive) == positive {
 					u := uint32(positive)
-					if math.Signbit(v) {
-						out[k] = '-'
-						k++
+					if neg {
+						out[1] = '-'
+						k = 2
 					}
 					if u < 10 {
 						out[k] = byte('0' + u)
@@ -406,9 +407,9 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 					continue
 				}
 				if absScaled := positive * 10; absScaled < 100 && math.Trunc(absScaled) == absScaled && absScaled/10 == positive {
-					if math.Signbit(v) {
-						out[k] = '-'
-						k++
+					if neg {
+						out[1] = '-'
+						k = 2
 					}
 					p := encodeDigitPairTable[uint32(absScaled)]
 					out[k] = p[0]
@@ -419,6 +420,7 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 				}
 			}
 			// Fall back to general path starting from this element.
+			buf[0] = '['
 			pos += k
 			dst = dst[:start+pos]
 			e.dst = dst
@@ -445,6 +447,7 @@ func (e *encodeState) appendFloat64Array(dst []byte, node *typedNode, src unsafe
 			break
 		}
 		if fastOK {
+			buf[0] = '['
 			buf[pos] = ']'
 			return dst[:start+pos+1], nil
 		}

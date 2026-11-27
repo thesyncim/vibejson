@@ -44,9 +44,7 @@ func copyStringPrefix(dst, src []byte) int {
 	if slicesOverlap(dst, src) {
 		return -1
 	}
-	end := scanStringSpecialScalar(src, 0)
-	copy(dst, src[:end])
-	return end
+	return copyStringPrefixSWAR(dst, src)
 }
 
 func copyHTMLStringPrefix(dst, src []byte) int {
@@ -57,9 +55,7 @@ func copyHTMLStringPrefix(dst, src []byte) int {
 	if slicesOverlap(dst, src) {
 		return -1
 	}
-	end := scanEncodedHTMLSpecialScalar(src, 0)
-	copy(dst, src[:end])
-	return end
+	return copyHTMLStringPrefixSWAR(dst, src)
 }
 
 func currentInfo() Info {

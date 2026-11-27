@@ -1,6 +1,12 @@
 package vibejson
 
-import "unsafe"
+import (
+	"encoding/binary"
+	"math/bits"
+	"unsafe"
+
+	"github.com/thesyncim/vibejson/x/byteview"
+)
 
 func (cursor *decoderCursor) decodeCompiledStruct(node *typedNode, dst unsafe.Pointer) error {
 	if i := cursor.i; i < len(cursor.src) && cursor.src[i] == '{' && cursor.depth < cursor.maxDepth {
@@ -50,15 +56,82 @@ decodeFields:
 		var err error
 		if uint(position) < uint(len(node.fields)) {
 			field = &node.fields[position]
-			if cursor.flags&decoderExpectedSlow == 0 && cursor.matchObjectFieldExpected(first, field) {
-				matched, ok = true, true
+			if cursor.flags&decoderExpectedSlow == 0 {
+				// Inline compact expected-key match for short keys (<= 7 bytes)
+				// to avoid a call to matchObjectFieldExpected on every field.
+				src := cursor.src
+				i := uint(cursor.i)
+				n := uint(len(src))
+				if field.keyMask != 0 {
+					var keyStart uint
+					if first {
+						if i < n && src[i] == '"' {
+							keyStart = i + 1
+						}
+					} else if i+1 < n && src[i] == ',' && src[i+1] == '"' {
+						keyStart = i + 2
+					}
+					if keyStart != 0 && keyStart+8 <= n &&
+						(binary.LittleEndian.Uint64(src[keyStart:])^field.key)&field.keyMask == 0 {
+						if field.keyLen <= 6 {
+							next := keyStart + uint(field.keyLen) + 2
+							if next < n {
+								if src[next] > ' ' {
+									cursor.i = int(next)
+									matched, ok = true, true
+									goto fieldMatched
+								}
+								if src[next] == ' ' && next+1 < n && src[next+1] > ' ' {
+									cursor.i = int(next + 1)
+									matched, ok = true, true
+									goto fieldMatched
+								}
+							}
+						} else if field.keyLen == 7 {
+							keyEnd := keyStart + 7
+							if keyEnd+2 <= n && binary.LittleEndian.Uint16(src[keyEnd:]) == quoteColonLE {
+								next := keyEnd + 2
+								if next < n {
+									if src[next] > ' ' {
+										cursor.i = int(next)
+										matched, ok = true, true
+										goto fieldMatched
+									}
+									if src[next] == ' ' && next+1 < n && src[next+1] > ' ' {
+										cursor.i = int(next + 1)
+										matched, ok = true, true
+										goto fieldMatched
+									}
+								}
+							}
+						}
+					}
+				}
+				if cursor.matchObjectFieldExpected(first, field) {
+					matched, ok = true, true
+				} else {
+					cursor.flags |= decoderExpectedSlow
+					key, matched, ok, err = cursor.nextObjectFieldExpectedSlow(first, field)
+				}
 			} else {
-				cursor.flags |= decoderExpectedSlow
 				key, matched, ok, err = cursor.nextObjectFieldExpectedSlow(first, field)
 			}
 		} else {
+			if !first {
+				src := cursor.src
+				if i := cursor.i; i < len(src) && src[i] == '}' {
+					cursor.i = i + 1
+					cursor.depth--
+					if cursor.flags&decoderReplace != 0 {
+						cursor.resetMissingTypedFields(node, dst, seen)
+					}
+					releaseInlineMapScratch(inlineDec)
+					return nil
+				}
+			}
 			key, ok, err = cursor.NextObjectField(first)
 		}
+	fieldMatched:
 		if err != nil {
 			return err
 		}
@@ -108,6 +181,95 @@ decodeFields:
 			fieldBase = resolved
 		}
 		fieldDst := unsafe.Add(fieldBase, field.offset)
+		// Inline fast paths for the most common compact scalar field kinds
+		// (bool, int64, clean ASCII string) before the generated dispatch.
+		switch field.op {
+		case typedOpBool:
+			src := cursor.src
+			if i := uint(cursor.i); i+4 <= uint(len(src)) {
+				if binary.LittleEndian.Uint32(src[i:i+4]) == wordTrueLE {
+					*(*bool)(fieldDst) = true
+					cursor.i = int(i + 4)
+					continue
+				}
+				if i+5 <= uint(len(src)) && src[i] == 'f' && binary.LittleEndian.Uint32(src[i+1:i+5]) == wordAlseLE {
+					*(*bool)(fieldDst) = false
+					cursor.i = int(i + 5)
+					continue
+				}
+			}
+		case typedOpInt64:
+			src := cursor.src
+			n := uint(len(src))
+			if i := uint(cursor.i); i < n {
+				c0 := src[i]
+				if c0 == '0' {
+					if i+1 < n && (src[i+1] == ',' || src[i+1] == '}') {
+						*(*int64)(fieldDst) = 0
+						cursor.i = int(i + 1)
+						continue
+					}
+				} else if c0 >= '1' && c0 <= '9' {
+					u := int64(c0 - '0')
+					j := i + 1
+					limit := i + 18
+					if limit > n {
+						limit = n
+					}
+					for j < limit {
+						d := src[j] - '0'
+						if d > 9 {
+							break
+						}
+						u = u*10 + int64(d)
+						j++
+					}
+					if j < n && (src[j] == ',' || src[j] == '}' || src[j] <= ' ') {
+						*(*int64)(fieldDst) = u
+						cursor.i = int(j)
+						continue
+					}
+				}
+			}
+		case typedOpString:
+			src := cursor.src
+			n := uint(len(src))
+			if i := uint(cursor.i); i < n && src[i] == '"' {
+				start := i + 1
+				var end uint
+				if start+8 <= n {
+					if m := stringSpecialMask(binary.LittleEndian.Uint64(src[start : start+8])); m != 0 {
+						off := uint(bits.TrailingZeros64(m)) >> 3
+						if src[start+off] == '"' {
+							end = start + off
+							goto stringFastDone
+						}
+					} else if start+16 <= n {
+						if m := stringSpecialMask(binary.LittleEndian.Uint64(src[start+8 : start+16])); m != 0 {
+							off := uint(bits.TrailingZeros64(m)) >> 3
+							if src[start+8+off] == '"' {
+								end = start + 8 + off
+								goto stringFastDone
+							}
+						} else if e := scanStringSpecial(src, int(start+16)); uint(e) < n && src[uint(e)] == '"' {
+							end = uint(e)
+							goto stringFastDone
+						}
+					}
+				}
+				goto slowFieldDispatch
+			stringFastDone:
+				sDst := (*string)(fieldDst)
+				if cursor.flags&decoderZeroCopy != 0 {
+					*sDst = byteview.String(src[start:end])
+				} else if !cursor.reuseOwnedString(*sDst, int(start), int(end)) {
+					*sDst = cursor.ownedString(int(start), int(end))
+				}
+				cursor.i = int(end + 1)
+				continue
+			}
+		}
+	slowFieldDispatch:
 		var fieldErr error
 		switch field.op {
 		// BEGIN GENERATED TYPED CURSOR FIELD DISPATCH

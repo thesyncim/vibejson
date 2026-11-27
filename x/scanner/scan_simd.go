@@ -602,17 +602,15 @@ func copyHTMLStringPrefix(dst, src []byte) int {
 	if slicesOverlap(dst, src) {
 		return -1
 	}
-	if !scanVectorAvailable() {
-		return copyHTMLStringPrefixScalar(dst, src)
+	if n < 16 || !scanVectorAvailable() {
+		return copyHTMLStringPrefixSWAR(dst, src)
 	}
 	return copyHTMLStringPrefixSIMD(dst, src)
 }
 
 //go:noinline
 func copyHTMLStringPrefixScalar(dst, src []byte) int {
-	end := scanEncodedHTMLSpecialScalar(src, 0)
-	copy(dst, src[:end])
-	return end
+	return copyHTMLStringPrefixSWAR(dst, src)
 }
 
 //go:noinline

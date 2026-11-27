@@ -7,14 +7,11 @@ import (
 	"simd/archsimd"
 )
 
-// nibbleShift holds the per-halfword shift count for the shrn idiom below.
-var nibbleShift = [8]int16{-4, -4, -4, -4, -4, -4, -4, -4}
-
 // maskNibbles extracts a 4-bits-per-lane nibble mask (the aarch64 shrn
 // idiom: shift halfword lanes right by four, then XTN) so one
 // vector-to-GPR transfer covers all 16 lanes.
 func maskNibbles(m archsimd.Mask8x16) uint64 {
-	shift := archsimd.LoadInt16x8Array(&nibbleShift)
+	shift := archsimd.BroadcastInt16x8(-4)
 	return m.ToInt8x16().ToBits().ReshapeToUint16s().Shift(shift).TruncToUint8().ReshapeToUint64s().GetElem(0)
 }
 

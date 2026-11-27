@@ -6,8 +6,9 @@ import simdkernels "github.com/thesyncim/vibejson/simd"
 // unchanged. That release's encoding/json implementation rejects documents
 // nested beyond 10,000 containers, so no identity map is needed here.
 type encodeState struct {
-	dst   []byte
-	depth int
+	dst     []byte
+	scratch *encoderScratch
+	depth   int
 	// ptrRun counts pointer hops along the current path with its own
 	// budget, so a pure pointer cycle still terminates while pointers no
 	// longer double-count against the container depth limit.
@@ -19,6 +20,5 @@ type encodeState struct {
 	// pointer-receiver marshaler to its default encoding, matching
 	// encoding/json's condAddrEncoder.
 	nonAddr   bool
-	scratch   *encoderScratch
 	timeCache simdkernels.TimeCache
 }

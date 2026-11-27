@@ -376,6 +376,24 @@ func decodeCompiledFloatArray[T floatValue](cursor *decoderCursor, node *typedNo
 	replace := cursor.flags&decoderReplace != 0
 	src := cursor.src
 	n := uint(len(src))
+	// Straight-line compact 3-element float64 array path (e.g. XYZ/scores).
+	if node.length == 3 && node.elem.size == 8 && !cursor.floatLong {
+		if i := uint(cursor.i); i < n && (src[i] == '-' || isDigit(src[i])) {
+			if v0, end0, ok0 := shortTypedFloatAt(src, int(i)); ok0 && uint(end0)+1 < n && src[end0] == ',' {
+				if v1, end1, ok1 := shortTypedFloatAt(src, end0+1); ok1 && uint(end1)+1 < n && src[end1] == ',' {
+					if v2, end2, ok2 := shortTypedFloatAt(src, end1+1); ok2 && uint(end2) < n && src[end2] == ']' {
+						values := (*[3]T)(dst)
+						values[0] = T(v0)
+						values[1] = T(v1)
+						values[2] = T(v2)
+						cursor.i = end2 + 1
+						cursor.depth--
+						return nil
+					}
+				}
+			}
+		}
+	}
 	// Straight-line coordinate-pair path: once elements are known to run
 	// long, a compact [f,f] parses without the per-element loop machinery.
 	if node.length == 2 && node.elem.size == 8 && cursor.floatLong {

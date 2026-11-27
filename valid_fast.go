@@ -134,6 +134,10 @@ func validValueFast(src []byte, idx int, c byte, depth int) (int, bool) {
 							i = start + off + 2
 							goto afterColon
 						}
+						if off == 7 && start+8 < n && src[start+8] == ':' {
+							i = start + 9
+							goto afterColon
+						}
 						i = start + off + 1
 						goto afterKey
 					}
