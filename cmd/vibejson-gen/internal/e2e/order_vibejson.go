@@ -2,7 +2,10 @@
 
 package e2e
 
-import "github.com/thesyncim/vibejson"
+import (
+	"github.com/thesyncim/vibejson"
+	"slices"
+)
 
 var _vibejsonFieldsOrder = vibejson.MakeFieldSet("id", "active", "customer", "note", "scores", "tags", "shipping", "billing")
 
@@ -247,7 +250,7 @@ func (v *Order) unmarshalVibeJSONRest(c *vibejson.DecodeCursor, first bool) erro
 		first = false
 		idx, known := _vibejsonFieldsOrder.Lookup(key, cs)
 		if !known {
-			if err := c.Skip(); err != nil {
+			if err := c.Unknown("Order", key); err != nil {
 				return err
 			}
 			continue
@@ -441,7 +444,7 @@ func (v *Address) unmarshalVibeJSONRest(c *vibejson.DecodeCursor, first bool) er
 		first = false
 		idx, known := _vibejsonFieldsAddress.Lookup(key, cs)
 		if !known {
-			if err := c.Skip(); err != nil {
+			if err := c.Unknown("Address", key); err != nil {
 				return err
 			}
 			continue
@@ -458,6 +461,260 @@ func (v *Address) unmarshalVibeJSONRest(c *vibejson.DecodeCursor, first bool) er
 		case 2:
 			if err := c.Int(&v.Zip); err != nil {
 				return err
+			}
+		}
+	}
+}
+
+var _vibejsonFieldsCatalog = vibejson.MakeFieldSet("name", "counts", "labels")
+
+// MarshalVibeJSON appends Catalog as compact JSON without reflection or unsafe.
+func (v *Catalog) MarshalVibeJSON(w vibejson.TrustedAppender) vibejson.TrustedAppender {
+	w = w.RawByteUnchecked('{')
+	first := true
+	if !first {
+		w = w.RawByteUnchecked(',')
+	}
+	first = false
+	w = w.RawUnchecked("\"name\":")
+	w = w.String(v.Name)
+	if len(v.Counts) != 0 {
+		if !first {
+			w = w.RawByteUnchecked(',')
+		}
+		first = false
+		w = w.RawUnchecked("\"counts\":")
+		if v.Counts == nil {
+			w = w.Null()
+		} else if len(v.Counts) == 0 {
+			w = w.RawUnchecked("{}")
+		} else if len(v.Counts) == 1 {
+			w = w.RawByteUnchecked('{')
+			for k2 := range v.Counts {
+				w = w.String(k2).RawByteUnchecked(':')
+				w = w.Int(int64(v.Counts[k2]))
+			}
+			w = w.RawByteUnchecked('}')
+		} else {
+			ks2 := make([]string, 0, len(v.Counts))
+			for k2 := range v.Counts {
+				ks2 = append(ks2, k2)
+			}
+			slices.Sort(ks2)
+			w = w.RawByteUnchecked('{')
+			for i2, k2 := range ks2 {
+				if i2 > 0 {
+					w = w.RawByteUnchecked(',')
+				}
+				w = w.String(k2).RawByteUnchecked(':')
+				w = w.Int(int64(v.Counts[k2]))
+			}
+			w = w.RawByteUnchecked('}')
+		}
+	}
+	if !first {
+		w = w.RawByteUnchecked(',')
+	}
+	first = false
+	w = w.RawUnchecked("\"labels\":")
+	if v.Labels == nil {
+		w = w.Null()
+	} else if len(v.Labels) == 0 {
+		w = w.RawUnchecked("{}")
+	} else if len(v.Labels) == 1 {
+		w = w.RawByteUnchecked('{')
+		for k1 := range v.Labels {
+			w = w.String(k1).RawByteUnchecked(':')
+			w = w.String(v.Labels[k1])
+		}
+		w = w.RawByteUnchecked('}')
+	} else {
+		ks1 := make([]string, 0, len(v.Labels))
+		for k1 := range v.Labels {
+			ks1 = append(ks1, k1)
+		}
+		slices.Sort(ks1)
+		w = w.RawByteUnchecked('{')
+		for i1, k1 := range ks1 {
+			if i1 > 0 {
+				w = w.RawByteUnchecked(',')
+			}
+			w = w.String(k1).RawByteUnchecked(':')
+			w = w.String(v.Labels[k1])
+		}
+		w = w.RawByteUnchecked('}')
+	}
+	return w.RawByteUnchecked('}')
+}
+
+// UnmarshalVibeJSON decodes Catalog directly without reflection or unsafe.
+func (v *Catalog) UnmarshalVibeJSON(c vibejson.DecodeCursor) (vibejson.DecodeCursor, error) {
+	if null, err := c.Null(); err != nil {
+		return c, err
+	} else if null {
+		return c, nil
+	}
+	if err := c.BeginObject("Catalog"); err != nil {
+		return c, err
+	}
+	if c.Field(true, _vibejsonFieldsCatalog.Field(0)) {
+		if err := c.String(&v.Name); err != nil {
+			return c, err
+		}
+		if c.Field(false, _vibejsonFieldsCatalog.Field(1)) {
+			if null, err := c.Null(); err != nil {
+				return c, err
+			} else if null {
+				v.Counts = nil
+			} else {
+				if err := c.BeginObject("map[string]int64"); err != nil {
+					return c, err
+				}
+				m3 := v.Counts
+				if m3 == nil {
+					m3 = make(map[string]int64)
+					v.Counts = m3
+				}
+				for first3 := true; ; first3 = false {
+					mk3, more, err := c.NextField(first3)
+					if err != nil {
+						return c, err
+					}
+					if !more {
+						break
+					}
+					var mv3 int64
+					if err := c.Int(&mv3); err != nil {
+						return c, err
+					}
+					m3[mk3] = mv3
+				}
+			}
+			if c.Field(false, _vibejsonFieldsCatalog.Field(2)) {
+				if null, err := c.Null(); err != nil {
+					return c, err
+				} else if null {
+					v.Labels = nil
+				} else {
+					if err := c.BeginObject("map[string]string"); err != nil {
+						return c, err
+					}
+					m4 := v.Labels
+					if m4 == nil {
+						m4 = make(map[string]string)
+						v.Labels = m4
+					}
+					for first4 := true; ; first4 = false {
+						mk4, more, err := c.NextField(first4)
+						if err != nil {
+							return c, err
+						}
+						if !more {
+							break
+						}
+						var mv4 string
+						if err := c.String(&mv4); err != nil {
+							return c, err
+						}
+						m4[mk4] = mv4
+					}
+				}
+				if c.ExpectObjectClose() {
+					return c, nil
+				}
+				err := v.unmarshalVibeJSONRest(&c, false)
+				return c, err
+			}
+			err := v.unmarshalVibeJSONRest(&c, false)
+			return c, err
+		}
+		err := v.unmarshalVibeJSONRest(&c, false)
+		return c, err
+	}
+	err := v.unmarshalVibeJSONRest(&c, true)
+	return c, err
+}
+
+func (v *Catalog) unmarshalVibeJSONRest(c *vibejson.DecodeCursor, first bool) error {
+	cs := c.CaseSensitive()
+	for {
+		key, ok, err := c.NextField(first)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		first = false
+		idx, known := _vibejsonFieldsCatalog.Lookup(key, cs)
+		if !known {
+			if err := c.Unknown("Catalog", key); err != nil {
+				return err
+			}
+			continue
+		}
+		switch idx {
+		case 0:
+			if err := c.String(&v.Name); err != nil {
+				return err
+			}
+		case 1:
+			if null, err := c.Null(); err != nil {
+				return err
+			} else if null {
+				v.Counts = nil
+			} else {
+				if err := c.BeginObject("map[string]int64"); err != nil {
+					return err
+				}
+				m3 := v.Counts
+				if m3 == nil {
+					m3 = make(map[string]int64)
+					v.Counts = m3
+				}
+				for first3 := true; ; first3 = false {
+					mk3, more, err := c.NextField(first3)
+					if err != nil {
+						return err
+					}
+					if !more {
+						break
+					}
+					var mv3 int64
+					if err := c.Int(&mv3); err != nil {
+						return err
+					}
+					m3[mk3] = mv3
+				}
+			}
+		case 2:
+			if null, err := c.Null(); err != nil {
+				return err
+			} else if null {
+				v.Labels = nil
+			} else {
+				if err := c.BeginObject("map[string]string"); err != nil {
+					return err
+				}
+				m3 := v.Labels
+				if m3 == nil {
+					m3 = make(map[string]string)
+					v.Labels = m3
+				}
+				for first3 := true; ; first3 = false {
+					mk3, more, err := c.NextField(first3)
+					if err != nil {
+						return err
+					}
+					if !more {
+						break
+					}
+					var mv3 string
+					if err := c.String(&mv3); err != nil {
+						return err
+					}
+					m3[mk3] = mv3
+				}
 			}
 		}
 	}

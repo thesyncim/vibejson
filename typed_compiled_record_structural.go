@@ -420,59 +420,9 @@ field4:
 			src[c1] == ',' && src[c2] == ',' && src[arrClose] == ']' &&
 			tape.gapClean(src, int(c1)+1, int(f1)) && tape.gapClean(src, int(c2)+1, int(f2)) &&
 			arrClose+1 == objClose && src[objClose] == '}' {
-			var v0, v1, v2 float64
-			var ok0, ok1, ok2 bool
-			switch c1 - f0 {
-			case 1:
-				if d := src[f0] - '0'; d <= 9 {
-					v0, ok0 = float64(d), true
-				}
-			case 3:
-				if d0, d2 := src[f0]-'0', src[f0+2]-'0'; src[f0+1] == '.' && d0 <= 9 && d2 <= 9 {
-					v0, ok0 = float64(d0)+oneDigitFractions[d2], true
-				}
-			case 4:
-				if d1, d3 := src[f0+1]-'0', src[f0+3]-'0'; src[f0] == '-' && d1 <= 9 && d3 <= 9 && src[f0+2]|0x20 == 'e' {
-					v0, ok0 = -float64(d1)*anyPow10[d3], true
-				}
-			}
-			if !ok0 {
-				v0, ok0 = shortStructuralFloatAt(src, f0, c1)
-			}
-			switch c2 - f1 {
-			case 1:
-				if d := src[f1] - '0'; d <= 9 {
-					v1, ok1 = float64(d), true
-				}
-			case 3:
-				if d0, d2 := src[f1]-'0', src[f1+2]-'0'; src[f1+1] == '.' && d0 <= 9 && d2 <= 9 {
-					v1, ok1 = float64(d0)+oneDigitFractions[d2], true
-				}
-			case 4:
-				if d1, d3 := src[f1+1]-'0', src[f1+3]-'0'; src[f1] == '-' && d1 <= 9 && d3 <= 9 && src[f1+2]|0x20 == 'e' {
-					v1, ok1 = -float64(d1)*anyPow10[d3], true
-				}
-			}
-			if !ok1 {
-				v1, ok1 = shortStructuralFloatAt(src, f1, c2)
-			}
-			switch arrClose - f2 {
-			case 1:
-				if d := src[f2] - '0'; d <= 9 {
-					v2, ok2 = float64(d), true
-				}
-			case 3:
-				if d0, d2 := src[f2]-'0', src[f2+2]-'0'; src[f2+1] == '.' && d0 <= 9 && d2 <= 9 {
-					v2, ok2 = float64(d0)+oneDigitFractions[d2], true
-				}
-			case 4:
-				if d1, d3 := src[f2+1]-'0', src[f2+3]-'0'; src[f2] == '-' && d1 <= 9 && d3 <= 9 && src[f2+2]|0x20 == 'e' {
-					v2, ok2 = -float64(d1)*anyPow10[d3], true
-				}
-			}
-			if !ok2 {
-				v2, ok2 = shortStructuralFloatAt(src, f2, arrClose)
-			}
+			v0, ok0 := parseCompactFloat64(src, f0, c1)
+			v1, ok1 := parseCompactFloat64(src, f1, c2)
+			v2, ok2 := parseCompactFloat64(src, f2, arrClose)
 			if ok0 && ok1 && ok2 {
 				values := (*[3]float64)(fifthDst)
 				values[0] = v0

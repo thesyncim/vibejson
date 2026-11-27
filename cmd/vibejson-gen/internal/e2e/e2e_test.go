@@ -88,6 +88,55 @@ func TestGeneratedCodecMatchesStdlib(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("shuffled decode mismatch:\ngot:  %+v\nwant: %+v", got, want)
 	}
+
+	// DisallowUnknownFields should reject unrecognized keys.
+	strictDec, err := vibejson.CompileDecoder[Order](vibejson.DecoderOptions{DisallowUnknownFields: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var strictGot Order
+	if err := strictDec.Decode(shuffled, &strictGot); err == nil {
+		t.Fatal("expected DisallowUnknownFields error for unknown key")
+	}
+}
+
+func TestGeneratedMapCodecMatchesStdlib(t *testing.T) {
+	cases := []Catalog{
+		{Name: "empty"},
+		{Name: "one", Counts: map[string]int64{"apples": 3}, Labels: map[string]string{}},
+		{Name: "multi", Counts: map[string]int64{"z": 1, "a": 2, "m": -5}, Labels: map[string]string{"env": "prod", "tier": "a&b"}},
+	}
+	enc, err := vibejson.CompileEncoder[Catalog](vibejson.EncoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := vibejson.CompileDecoder[Catalog](vibejson.DecoderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, in := range cases {
+		wantJSON, err := json.Marshal(&in)
+		if err != nil {
+			t.Fatalf("case %d stdlib marshal: %v", i, err)
+		}
+		gotJSON, err := enc.AppendJSON(nil, &in)
+		if err != nil {
+			t.Fatalf("case %d vibejson marshal: %v", i, err)
+		}
+		if !bytes.Equal(gotJSON, wantJSON) {
+			t.Fatalf("case %d marshal mismatch:\ngot:  %s\nwant: %s", i, gotJSON, wantJSON)
+		}
+		var got, want Catalog
+		if err := json.Unmarshal(wantJSON, &want); err != nil {
+			t.Fatalf("case %d stdlib unmarshal: %v", i, err)
+		}
+		if err := dec.Decode(wantJSON, &got); err != nil {
+			t.Fatalf("case %d vibejson unmarshal: %v", i, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("case %d unmarshal mismatch:\ngot:  %+v\nwant: %+v", i, got, want)
+		}
+	}
 }
 
 func BenchmarkGeneratedOrderEncode(b *testing.B) {

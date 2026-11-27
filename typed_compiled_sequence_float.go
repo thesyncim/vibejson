@@ -90,6 +90,26 @@ func shortStructuralFloatAt(src []byte, start, limit uint) (float64, bool) {
 	return 0, false
 }
 
+// parseCompactFloat64 handles the common 1-, 3-, and 4-byte float forms inline
+// and falls back to shortStructuralFloatAt for wider compact forms.
+func parseCompactFloat64(src []byte, start, limit uint) (float64, bool) {
+	switch limit - start {
+	case 1:
+		if d := src[start] - '0'; d <= 9 {
+			return float64(d), true
+		}
+	case 3:
+		if d0, d2 := src[start]-'0', src[start+2]-'0'; src[start+1] == '.' && d0 <= 9 && d2 <= 9 {
+			return float64(d0) + oneDigitFractions[d2], true
+		}
+	case 4:
+		if d1, d3 := src[start+1]-'0', src[start+3]-'0'; src[start] == '-' && d1 <= 9 && d3 <= 9 && src[start+2]|0x20 == 'e' {
+			return -float64(d1) * anyPow10[d3], true
+		}
+	}
+	return shortStructuralFloatAt(src, start, limit)
+}
+
 func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNode, dst unsafe.Pointer) error {
 	tape := &cursor.state.structural
 	positions := tape.positions
@@ -121,59 +141,9 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 		!tape.gapClean(s, int(comma2)+1, int(third)) {
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
-	var v0, v1, v2 float64
-	var ok0, ok1, ok2 bool
-	switch comma1 - first {
-	case 1:
-		if d := s[first] - '0'; d <= 9 {
-			v0, ok0 = float64(d), true
-		}
-	case 3:
-		if d0, d2 := s[first]-'0', s[first+2]-'0'; s[first+1] == '.' && d0 <= 9 && d2 <= 9 {
-			v0, ok0 = float64(d0)+oneDigitFractions[d2], true
-		}
-	case 4:
-		if d1, d3 := s[first+1]-'0', s[first+3]-'0'; s[first] == '-' && d1 <= 9 && d3 <= 9 && s[first+2]|0x20 == 'e' {
-			v0, ok0 = -float64(d1)*anyPow10[d3], true
-		}
-	}
-	if !ok0 {
-		v0, ok0 = shortStructuralFloatAt(src, first, comma1)
-	}
-	switch comma2 - second {
-	case 1:
-		if d := s[second] - '0'; d <= 9 {
-			v1, ok1 = float64(d), true
-		}
-	case 3:
-		if d0, d2 := s[second]-'0', s[second+2]-'0'; s[second+1] == '.' && d0 <= 9 && d2 <= 9 {
-			v1, ok1 = float64(d0)+oneDigitFractions[d2], true
-		}
-	case 4:
-		if d1, d3 := s[second+1]-'0', s[second+3]-'0'; s[second] == '-' && d1 <= 9 && d3 <= 9 && s[second+2]|0x20 == 'e' {
-			v1, ok1 = -float64(d1)*anyPow10[d3], true
-		}
-	}
-	if !ok1 {
-		v1, ok1 = shortStructuralFloatAt(src, second, comma2)
-	}
-	switch closePosition - third {
-	case 1:
-		if d := s[third] - '0'; d <= 9 {
-			v2, ok2 = float64(d), true
-		}
-	case 3:
-		if d0, d2 := s[third]-'0', s[third+2]-'0'; s[third+1] == '.' && d0 <= 9 && d2 <= 9 {
-			v2, ok2 = float64(d0)+oneDigitFractions[d2], true
-		}
-	case 4:
-		if d1, d3 := s[third+1]-'0', s[third+3]-'0'; s[third] == '-' && d1 <= 9 && d3 <= 9 && s[third+2]|0x20 == 'e' {
-			v2, ok2 = -float64(d1)*anyPow10[d3], true
-		}
-	}
-	if !ok2 {
-		v2, ok2 = shortStructuralFloatAt(src, third, closePosition)
-	}
+	v0, ok0 := parseCompactFloat64(src, first, comma1)
+	v1, ok1 := parseCompactFloat64(src, second, comma2)
+	v2, ok2 := parseCompactFloat64(src, third, closePosition)
 	if !ok0 || !ok1 || !ok2 {
 		tape.index = token
 		cursor.i = start
