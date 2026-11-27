@@ -53,7 +53,7 @@ func (cursor *decoderCursor) decodeCompiled(node *typedNode, dst unsafe.Pointer)
 	case typedMap:
 		return cursor.decodeCompiledMap(node, dst)
 	case typedAny:
-		return cursor.decodeCompiledAny(dst)
+		return cursor.decodeCompiledAnyValue((*any)(dst), false)
 	case typedBytes:
 		return cursor.decodeCompiledBytes(node, dst)
 	case typedUnmarshalerJSON:
@@ -63,7 +63,7 @@ func (cursor *decoderCursor) decodeCompiled(node *typedNode, dst unsafe.Pointer)
 	case typedUnmarshalerSimd:
 		return cursor.decodeViaSimdHook(node, dst)
 	case typedIface:
-		return cursor.decodeCompiledIface(node, dst)
+		return cursor.decodeCompiledIfaceValue(node, reflect.NewAt(node.typ, dst).Elem(), false)
 	case typedAnyInline:
 		return cursor.decodeCompiledAnyValue((*any)(dst), true)
 	case typedIfaceInline:

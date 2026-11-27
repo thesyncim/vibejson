@@ -150,7 +150,7 @@ func TestDecoderMapScratchAllocs(t *testing.T) {
 		opts DecoderOptions
 		want float64
 	}{
-		{name: "owned", opts: DecoderOptions{}, want: 1},
+		{name: "owned", opts: DecoderOptions{}, want: 0},
 		{name: "zero-copy", opts: DecoderOptions{ZeroCopy: true}, want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

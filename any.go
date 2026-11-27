@@ -30,25 +30,42 @@ import (
 // DecoderOptions concern typed destinations and have nothing to act on in the
 // dynamic shapes.
 func unmarshalAny(src []byte, opts DecoderOptions) (any, error) {
+	if len(src) > 256 {
+		return unmarshalAnyLarge(src, opts)
+	}
+	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy}
+	if !opts.ZeroCopy {
+		if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
+			p.strings = make([]byte, 0, capacity)
+		}
+	}
+	p.skipSpace()
+	v, err := p.parseAnyValue(0, opts.UseNumber)
+	if err != nil {
+		return nil, err
+	}
+	p.skipSpace()
+	if p.i != len(src) {
+		return nil, p.err(p.i, "unexpected data after top-level value")
+	}
+	return v, nil
+}
+
+//go:noinline
+func unmarshalAnyLarge(src []byte, opts DecoderOptions) (any, error) {
 	p := parser{src: src, maxDepth: maxDepthOrDefault(opts.MaxDepth), zeroCopy: opts.ZeroCopy}
 	var keyCache [64]string
 	var scalarCache anyScalarCache
-	if len(src) > 256 {
-		p.scalarCache = &scalarCache
-	}
+	p.scalarCache = &scalarCache
 	if !opts.ZeroCopy {
-		if len(src) > 256 {
-			p.keyCache = &keyCache
-			// Skip a full-document pre-scan on large inputs; seed a bounded
-			// pointer-free arena and let p.arenaBlock() grow on demand.
-			capHint := len(src) / 4
-			if capHint > 16<<10 {
-				capHint = 16 << 10
-			}
-			p.strings = make([]byte, 0, capHint+stringArenaHeadroom)
-		} else if capacity := ownedAnyStringCapacity(src, opts.UseNumber); capacity != 0 {
-			p.strings = make([]byte, 0, capacity)
+		p.keyCache = &keyCache
+		// Skip a full-document pre-scan on large inputs; seed a bounded
+		// pointer-free arena and let p.arenaBlock() grow on demand.
+		capHint := len(src) / 4
+		if capHint > 16<<10 {
+			capHint = 16 << 10
 		}
+		p.strings = make([]byte, 0, capHint+stringArenaHeadroom)
 	}
 	p.skipSpace()
 	v, err := p.parseAnyValue(0, opts.UseNumber)

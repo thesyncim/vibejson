@@ -9,20 +9,6 @@ import (
 	"unsafe"
 )
 
-func copyMethodReceiverBack(typ reflect.Type, dst unsafe.Pointer, shadow reflect.Value) {
-	if !shadow.IsValid() {
-		return
-	}
-	if typ.Kind() == reflect.Pointer {
-		pointer := *(*unsafe.Pointer)(dst)
-		if pointer != nil {
-			reflect.NewAt(typ.Elem(), pointer).Elem().Set(shadow.Elem())
-		}
-		return
-	}
-	reflect.NewAt(typ, dst).Elem().Set(shadow.Elem())
-}
-
 // decodeViaUnmarshaler feeds the raw bytes of the next JSON value to the
 // destination's UnmarshalJSON, exactly one validated value, null included.
 func (cursor *decoderCursor) decodeViaUnmarshaler(node *typedNode, dst unsafe.Pointer) error {
@@ -51,7 +37,15 @@ func (cursor *decoderCursor) decodeViaUnmarshaler(node *typedNode, dst unsafe.Po
 		return &DecodeError{Offset: start, Type: node.typ, Reason: "invalid compiled operation"}
 	}
 	err := unmarshaler.UnmarshalJSON(raw)
-	copyMethodReceiverBack(node.typ, dst, shadow)
+	if shadow.IsValid() {
+		if node.typ.Kind() == reflect.Pointer {
+			if pointer := *(*unsafe.Pointer)(dst); pointer != nil {
+				reflect.NewAt(node.typ.Elem(), pointer).Elem().Set(shadow.Elem())
+			}
+		} else {
+			reflect.NewAt(node.typ, dst).Elem().Set(shadow.Elem())
+		}
+	}
 	if err != nil {
 		return &DecodeError{Offset: start, Type: node.typ, Reason: err.Error()}
 	}
@@ -119,7 +113,15 @@ func (cursor *decoderCursor) decodeViaTextUnmarshaler(node *typedNode, dst unsaf
 		return &DecodeError{Offset: start, Type: node.typ, Reason: "invalid compiled operation"}
 	}
 	err = unmarshaler.UnmarshalText(text)
-	copyMethodReceiverBack(node.typ, dst, shadow)
+	if shadow.IsValid() {
+		if node.typ.Kind() == reflect.Pointer {
+			if pointer := *(*unsafe.Pointer)(dst); pointer != nil {
+				reflect.NewAt(node.typ.Elem(), pointer).Elem().Set(shadow.Elem())
+			}
+		} else {
+			reflect.NewAt(node.typ, dst).Elem().Set(shadow.Elem())
+		}
+	}
 	if err != nil {
 		return &DecodeError{Offset: start, Type: node.typ, Reason: err.Error()}
 	}

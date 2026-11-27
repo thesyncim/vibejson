@@ -233,9 +233,9 @@ func decodeBody(op operation, structural bool) []string {
 	case "map":
 		return []string{"fieldErr = cursor.decodeCompiledMap(fieldNode, fieldDst)"}
 	case "any":
-		return []string{"fieldErr = cursor.decodeCompiledAny(fieldDst)"}
+		return []string{"fieldErr = cursor.decodeCompiledAnyValue((*any)(fieldDst), false)"}
 	case "anyInline":
-		return []string{"fieldErr = cursor.decodeCompiledAnyInline(fieldDst)"}
+		return []string{"fieldErr = cursor.decodeCompiledAnyValue((*any)(fieldDst), true)"}
 	case "bytes":
 		return []string{"fieldErr = cursor.decodeCompiledBytes(fieldNode, fieldDst)"}
 	case "quoted":
@@ -252,9 +252,9 @@ func decodeBody(op operation, structural bool) []string {
 			"}",
 		}
 	case "iface":
-		return []string{"fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)"}
+		return []string{"fieldErr = cursor.decodeCompiledIfaceValue(fieldNode, reflect.NewAt(fieldNode.typ, fieldDst).Elem(), false)"}
 	case "ifaceInline":
-		return []string{"fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)"}
+		return []string{"fieldErr = cursor.decodeCompiledIfaceValue(fieldNode, reflect.NewAt(fieldNode.typ, fieldDst).Elem(), true)"}
 	default:
 		panic("missing decode body for " + op.name)
 	}

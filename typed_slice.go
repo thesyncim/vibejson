@@ -66,6 +66,13 @@ func (slice *typedSliceState) setEmpty() {
 	slice.refresh()
 }
 
+func (slice *typedSliceState) setEmptyIfNeeded() {
+	if slice.len == 0 && slice.cap == 0 && !slice.isNil() {
+		return
+	}
+	slice.setEmpty()
+}
+
 // isNil reports whether the destination slice is nil, through the language's
 // own nil test on the reinterpreted view; the data pointer is unsuitable for
 // this because unsafe.SliceData is unspecified for non-nil empty slices.

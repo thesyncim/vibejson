@@ -3,6 +3,7 @@ package vibejson
 import (
 	"encoding/binary"
 	"math/bits"
+	"reflect"
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/x/byteview"
@@ -310,7 +311,7 @@ decodeFields:
 		case typedOpMap:
 			fieldErr = cursor.decodeCompiledMap(fieldNode, fieldDst)
 		case typedOpAny:
-			fieldErr = cursor.decodeCompiledAny(fieldDst)
+			fieldErr = cursor.decodeCompiledAnyValue((*any)(fieldDst), false)
 		case typedOpBytes:
 			fieldErr = cursor.decodeCompiledBytes(fieldNode, fieldDst)
 		case typedOpQuoted:
@@ -325,7 +326,7 @@ decodeFields:
 				fieldErr = cursor.decodeViaTextUnmarshaler(fieldNode, fieldDst)
 			}
 		case typedOpIface:
-			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
+			fieldErr = cursor.decodeCompiledIfaceValue(fieldNode, reflect.NewAt(fieldNode.typ, fieldDst).Elem(), false)
 		// END GENERATED TYPED CURSOR FIELD DISPATCH
 		default:
 			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)

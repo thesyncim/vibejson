@@ -880,7 +880,11 @@ func (cursor *decoderCursor) decodeMapStringInt(node *typedNode, dst *map[string
 		if err := cursor.Int(&val); err != nil {
 			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
 		}
-		m[cursor.ownedText(key)] = val
+		if _, exists := m[key]; exists {
+			m[key] = val
+		} else {
+			m[cursor.ownedText(key)] = val
+		}
 	}
 }
 
@@ -918,7 +922,11 @@ func (cursor *decoderCursor) decodeMapStringInt64(node *typedNode, dst *map[stri
 		if err := cursor.Int(&val); err != nil {
 			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
 		}
-		m[cursor.ownedText(key)] = val
+		if _, exists := m[key]; exists {
+			m[key] = val
+		} else {
+			m[cursor.ownedText(key)] = val
+		}
 	}
 }
 
@@ -956,7 +964,11 @@ func (cursor *decoderCursor) decodeMapStringString(node *typedNode, dst *map[str
 		if err := cursor.String(&val); err != nil {
 			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
 		}
-		m[cursor.ownedText(key)] = val
+		if _, exists := m[key]; exists {
+			m[key] = val
+		} else {
+			m[cursor.ownedText(key)] = val
+		}
 	}
 }
 
@@ -994,7 +1006,11 @@ func (cursor *decoderCursor) decodeMapStringFloat64(node *typedNode, dst *map[st
 		if err := cursor.Float(&val); err != nil {
 			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
 		}
-		m[cursor.ownedText(key)] = val
+		if _, exists := m[key]; exists {
+			m[key] = val
+		} else {
+			m[cursor.ownedText(key)] = val
+		}
 	}
 }
 
@@ -1032,7 +1048,11 @@ func (cursor *decoderCursor) decodeMapStringBool(node *typedNode, dst *map[strin
 		if err := cursor.Bool(&val); err != nil {
 			return prependDecodePathField(retagCompiledError(err, node.elem.typ), key)
 		}
-		m[cursor.ownedText(key)] = val
+		if _, exists := m[key]; exists {
+			m[key] = val
+		} else {
+			m[cursor.ownedText(key)] = val
+		}
 	}
 }
 
@@ -1082,15 +1102,11 @@ func anyDecodeMerges(existing any) bool {
 	return value.Kind() == reflect.Pointer && !value.IsNil()
 }
 
-// decodeCompiledAny decodes one JSON value into an empty interface using the
-// standard dynamic shapes: map[string]any, []any, string, float64 (or
+// decodeCompiledAnyValue decodes one JSON value into an empty interface using
+// the standard dynamic shapes: map[string]any, []any, string, float64 (or
 // json.Number under UseNumber), bool, and nil. Like encoding/json, an
 // interface already holding a non-nil pointer is decoded into rather than
 // replaced; anything else is replaced, and null clears the interface.
-func (cursor *decoderCursor) decodeCompiledAny(dst unsafe.Pointer) error {
-	return cursor.decodeCompiledAnyValue((*any)(dst), false)
-}
-
 func (cursor *decoderCursor) decodeCompiledAnyValue(dst *any, inline bool) error {
 	if existing := *dst; cursor.flags&decoderReplace == 0 && existing != nil {
 		null := false
@@ -1254,13 +1270,9 @@ func (cursor *decoderCursor) decodePointerChain(node *typedNode, dst unsafe.Poin
 	}
 }
 
-// decodeCompiledIface decodes into a non-empty interface: null clears it,
+// decodeCompiledIfaceValue decodes into a non-empty interface: null clears it,
 // and a held non-nil pointer is decoded into like encoding/json; any other
 // state cannot be decoded.
-func (cursor *decoderCursor) decodeCompiledIface(node *typedNode, dst unsafe.Pointer) error {
-	return cursor.decodeCompiledIfaceValue(node, reflect.NewAt(node.typ, dst).Elem(), false)
-}
-
 func (cursor *decoderCursor) decodeCompiledIfaceValue(node *typedNode, value reflect.Value, inline bool) error {
 	null := false
 	if !cursor.notNullFast() {
@@ -1347,7 +1359,102 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 	}
 	switch scalar.kind {
 	case typedInt, typedUint, typedFloat:
-		return cursor.decodeQuotedNumber(node, scalar, dst, inner, i, cursor.flags&decoderReplace != 0)
+		// Store a string-tagged number with encoding/json's semantics: the
+		// quoted contents are handed to strconv verbatim, which accepts
+		// spellings strict JSON does not (leading zeros, explicit plus, and
+		// strconv's float forms).
+		replace := cursor.flags&decoderReplace != 0
+		text := byteview.String(inner)
+		if text == "null" {
+			if node.baseKind == typedPointer {
+				previousScope, scoped := uint32(0), false
+				if replace {
+					previousScope, scoped = cursor.beginReplaceScope(dst)
+				}
+				*(*unsafe.Pointer)(dst) = nil
+				if replace {
+					cursor.refreshReplaceReference(node, dst)
+				}
+				cursor.endReplaceScope(previousScope, scoped)
+			} else if replace {
+				resetTyped(node, dst)
+			}
+			return nil
+		}
+		scalarDst := dst
+		previousScope, scoped := uint32(0), false
+		if node.baseKind == typedPointer {
+			if replace {
+				previousScope, scoped = cursor.beginReplaceScope(dst)
+			}
+			pointer := *(*unsafe.Pointer)(dst)
+			if replace {
+				if cursor.state != nil && cursor.state.operation != nil && cursor.state.operation.replace != nil {
+					if pointer != nil {
+						reference, _ := cursor.currentReplaceReference(node, dst)
+						if cursor.replaceReferenceSeen(reference) {
+							pointer = nil
+						}
+					}
+				} else if pointer != nil && cursor.pointerAliasesDestination(pointer, node.elem.size) {
+					pointer = nil
+				}
+			}
+			if pointer == nil {
+				pointer = allocateTypedPointer(node, dst)
+			}
+			scalarDst = pointer
+		}
+		switch scalar.kind {
+		case typedInt:
+			value, err := strconv.ParseInt(text, 10, int(scalar.bits))
+			if err != nil {
+				cursor.endReplaceScope(previousScope, scoped)
+				return &DecodeError{Offset: i, Type: node.typ, Reason: "cannot parse string-tagged integer " + strconv.Quote(text)}
+			}
+			switch scalar.bits {
+			case 8:
+				*(*int8)(scalarDst) = int8(value)
+			case 16:
+				*(*int16)(scalarDst) = int16(value)
+			case 32:
+				*(*int32)(scalarDst) = int32(value)
+			default:
+				*(*int64)(scalarDst) = value
+			}
+		case typedUint:
+			value, err := strconv.ParseUint(text, 10, int(scalar.bits))
+			if err != nil {
+				cursor.endReplaceScope(previousScope, scoped)
+				return &DecodeError{Offset: i, Type: node.typ, Reason: "cannot parse string-tagged integer " + strconv.Quote(text)}
+			}
+			switch scalar.bits {
+			case 8:
+				*(*uint8)(scalarDst) = uint8(value)
+			case 16:
+				*(*uint16)(scalarDst) = uint16(value)
+			case 32:
+				*(*uint32)(scalarDst) = uint32(value)
+			default:
+				*(*uint64)(scalarDst) = value
+			}
+		default:
+			value, err := strconv.ParseFloat(text, int(scalar.bits))
+			if err != nil {
+				cursor.endReplaceScope(previousScope, scoped)
+				return &DecodeError{Offset: i, Type: node.typ, Reason: "cannot parse string-tagged number " + strconv.Quote(text)}
+			}
+			if scalar.bits == 32 {
+				*(*float32)(scalarDst) = float32(value)
+			} else {
+				*(*float64)(scalarDst) = value
+			}
+		}
+		if replace && node.baseKind == typedPointer {
+			cursor.refreshReplaceReference(node, dst)
+		}
+		cursor.endReplaceScope(previousScope, scoped)
+		return nil
 	}
 	if scalar.kind == typedString {
 		// The contents must themselves be a JSON string.
@@ -1371,106 +1478,6 @@ func (cursor *decoderCursor) decodeQuotedField(node *typedNode, dst unsafe.Point
 	if sub.i != len(inner) {
 		return &DecodeError{Offset: i, Type: node.typ, Reason: "string-tagged field contains trailing data"}
 	}
-	return nil
-}
-
-// decodeQuotedNumber stores a string-tagged number with encoding/json's
-// semantics: the quoted contents are handed to strconv verbatim, which
-// accepts spellings strict JSON does not (leading zeros, an explicit plus,
-// and strconv's float forms).
-func (cursor *decoderCursor) decodeQuotedNumber(node, scalar *typedNode, dst unsafe.Pointer, inner []byte, offset int, replace bool) error {
-	text := byteview.String(inner)
-	if text == "null" {
-		// encoding/json treats a quoted null like the bare literal: value
-		// fields are left untouched and pointer fields are cleared.
-		if node.baseKind == typedPointer {
-			previousScope, scoped := uint32(0), false
-			if replace {
-				previousScope, scoped = cursor.beginReplaceScope(dst)
-			}
-			*(*unsafe.Pointer)(dst) = nil
-			if replace {
-				cursor.refreshReplaceReference(node, dst)
-			}
-			cursor.endReplaceScope(previousScope, scoped)
-		} else if replace {
-			resetTyped(node, dst)
-		}
-		return nil
-	}
-	scalarDst := dst
-	previousScope, scoped := uint32(0), false
-	if node.baseKind == typedPointer {
-		if replace {
-			previousScope, scoped = cursor.beginReplaceScope(dst)
-		}
-		pointer := *(*unsafe.Pointer)(dst)
-		if replace {
-			if cursor.state != nil && cursor.state.operation != nil && cursor.state.operation.replace != nil {
-				if pointer != nil {
-					reference, _ := cursor.currentReplaceReference(node, dst)
-					if cursor.replaceReferenceSeen(reference) {
-						pointer = nil
-					}
-				}
-			} else if pointer != nil && cursor.pointerAliasesDestination(pointer, node.elem.size) {
-				pointer = nil
-			}
-		}
-		if pointer == nil {
-			pointer = allocateTypedPointer(node, dst)
-		}
-		scalarDst = pointer
-	}
-	switch scalar.kind {
-	case typedInt:
-		value, err := strconv.ParseInt(text, 10, int(scalar.bits))
-		if err != nil {
-			cursor.endReplaceScope(previousScope, scoped)
-			return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged integer " + strconv.Quote(text)}
-		}
-		switch scalar.bits {
-		case 8:
-			*(*int8)(scalarDst) = int8(value)
-		case 16:
-			*(*int16)(scalarDst) = int16(value)
-		case 32:
-			*(*int32)(scalarDst) = int32(value)
-		default:
-			*(*int64)(scalarDst) = value
-		}
-	case typedUint:
-		value, err := strconv.ParseUint(text, 10, int(scalar.bits))
-		if err != nil {
-			cursor.endReplaceScope(previousScope, scoped)
-			return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged integer " + strconv.Quote(text)}
-		}
-		switch scalar.bits {
-		case 8:
-			*(*uint8)(scalarDst) = uint8(value)
-		case 16:
-			*(*uint16)(scalarDst) = uint16(value)
-		case 32:
-			*(*uint32)(scalarDst) = uint32(value)
-		default:
-			*(*uint64)(scalarDst) = value
-		}
-	default:
-		value, err := strconv.ParseFloat(text, int(scalar.bits))
-		if err != nil {
-			cursor.endReplaceScope(previousScope, scoped)
-			return &DecodeError{Offset: offset, Type: node.typ, Reason: "cannot parse string-tagged number " + strconv.Quote(text)}
-		}
-		if scalar.bits == 32 {
-			*(*float32)(scalarDst) = float32(value)
-		} else {
-			*(*float64)(scalarDst) = value
-		}
-	}
-	if replace && node.baseKind == typedPointer {
-		cursor.refreshReplaceReference(node, dst)
-	}
-	cursor.endReplaceScope(previousScope, scoped)
 	return nil
 }
 
@@ -1665,20 +1672,6 @@ func allocateTypedPointer(node *typedNode, dst unsafe.Pointer) unsafe.Pointer {
 	*(*unsafe.Pointer)(dst) = pointer
 	runtime.KeepAlive(value)
 	return pointer
-}
-
-func setTypedEmptySlice(node *typedNode, dst unsafe.Pointer) {
-	slice := typedSliceAt(node.typ, dst)
-	if slice.len == 0 && slice.cap == 0 && !slice.isNil() {
-		// The destination already holds the non-nil len=cap=0 sentinel a
-		// fresh reflect.MakeSlice would install, so reused destinations
-		// decode empty arrays without manufacturing anything. Any other
-		// shape takes the fresh slice, preserving the isolation contract
-		// (TestTypedDecoderEmptySliceSentinelIsNonNilAndIsolated) and
-		// encoding/json's element-releasing replacement semantics.
-		return
-	}
-	slice.setEmpty()
 }
 
 func retagCompiledError(err error, typ reflect.Type) error {

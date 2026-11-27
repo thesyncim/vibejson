@@ -3,9 +3,11 @@ package vibejson
 import (
 	"cmp"
 	"slices"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/x/byteview"
 )
 
 // MarshalJSON implements json.Marshaler.
@@ -181,50 +183,175 @@ func Canonicalize(src []byte) ([]byte, error) {
 // temporary navigation storage and, for objects, member-order storage even when
 // dst has sufficient capacity. Calls are safe concurrently when their sources
 // remain immutable and their writable destination storage is independent.
-func AppendCanonicalize(dst, src []byte) ([]byte, error) {
-	v, err := ParseOptions(src, Options{ZeroCopy: true})
-	if err != nil {
-		return dst, err
-	}
-	return appendCanonical(dst, v), nil
+type canonicalMember struct {
+	key  string
+	node Node
 }
 
-// appendCanonical appends compact JSON for v with every object's members sorted
-// by decoded key. Arrays keep their order. Strings and numbers are normalized
-// exactly as AppendJSON does, so the canonical form is stable regardless of the
-// source's escape spelling or member order.
-func appendCanonical(dst []byte, v Value) []byte {
-	switch v.node.Kind() {
+type canonicalScratch struct {
+	entries []IndexEntry
+	members []canonicalMember
+	keyBuf  []byte
+}
+
+var canonicalScratchPool = sync.Pool{
+	New: func() any {
+		return &canonicalScratch{
+			entries: make([]IndexEntry, 0, 64),
+		}
+	},
+}
+
+const (
+	canonicalMaxPooledEntries = 4096
+	canonicalMaxPooledMembers = 256
+	canonicalMaxPooledKeyBuf  = 4096
+)
+
+func AppendCanonicalize(dst, src []byte) ([]byte, error) {
+	scratch := canonicalScratchPool.Get().(*canonicalScratch)
+	opts := document.IndexOptions{MaxDepth: DefaultMaxDepth}
+	idx, err := BuildIndexOptions(src, scratch.entries[:0], opts)
+	if err == document.ErrIndexFull {
+		needed, reqErr := RequiredIndexEntries(src)
+		if reqErr != nil {
+			if cap(scratch.entries) <= canonicalMaxPooledEntries {
+				scratch.entries = scratch.entries[:0]
+				canonicalScratchPool.Put(scratch)
+			}
+			return dst, reqErr
+		}
+		if needed < cap(scratch.entries)*2 {
+			needed = cap(scratch.entries) * 2
+		}
+		scratch.entries = make([]IndexEntry, 0, needed)
+		idx, err = BuildIndexOptions(src, scratch.entries[:0], opts)
+	}
+	if err != nil {
+		if cap(scratch.entries) <= canonicalMaxPooledEntries {
+			scratch.entries = scratch.entries[:0]
+			canonicalScratchPool.Put(scratch)
+		}
+		return dst, err
+	}
+	scratch.entries = idx.Entries[:0]
+	scratch.members = scratch.members[:0]
+	scratch.keyBuf = scratch.keyBuf[:0]
+	out := appendCanonicalNode(dst, idx.Root(), scratch)
+	if cap(scratch.entries) <= canonicalMaxPooledEntries &&
+		cap(scratch.members) <= canonicalMaxPooledMembers &&
+		cap(scratch.keyBuf) <= canonicalMaxPooledKeyBuf {
+		clear(scratch.members[:cap(scratch.members)])
+		scratch.entries = scratch.entries[:0]
+		scratch.members = scratch.members[:0]
+		scratch.keyBuf = scratch.keyBuf[:0]
+		canonicalScratchPool.Put(scratch)
+	}
+	return out, nil
+}
+
+// appendCanonicalNode appends compact JSON for node with every object's members
+// sorted by decoded key. Arrays keep their order. Strings and numbers are
+// normalized exactly as AppendJSON does, so the canonical form is stable
+// regardless of the source's escape spelling or member order.
+func appendCanonicalNode(dst []byte, node Node, scratch *canonicalScratch) []byte {
+	switch node.Kind() {
+	case document.Null:
+		return append(dst, "null"...)
+	case document.Bool:
+		if b, _ := node.Bool(); b {
+			return append(dst, "true"...)
+		}
+		return append(dst, "false"...)
+	case document.Number:
+		s, _ := node.NumberBytes()
+		return append(dst, s...)
+	case document.String:
+		return appendJSONNodeString(dst, node)
 	case document.Array:
 		dst = append(dst, '[')
-		iter, _ := v.node.ArrayIter()
+		iter, _ := node.ArrayIter()
 		for i := 0; ; i++ {
-			node, ok := iter.Next()
+			elem, ok := iter.Next()
 			if !ok {
 				break
 			}
 			if i > 0 {
 				dst = append(dst, ',')
 			}
-			dst = appendCanonical(dst, v.with(node))
+			dst = appendCanonicalNode(dst, elem, scratch)
 		}
 		return append(dst, ']')
 	case document.Object:
-		members, _ := v.Object()
-		slices.SortStableFunc(members, func(a, b Member) int {
-			return cmp.Compare(a.Key, b.Key)
-		})
+		count, _ := node.ObjectLen()
+		if count == 0 {
+			return append(dst, '{', '}')
+		}
+		iter, _ := node.ObjectIter()
+		var stack [16]canonicalMember
+		var members []canonicalMember
+		memberBase := len(scratch.members)
+		keyBase := len(scratch.keyBuf)
+		if count <= len(stack) {
+			members = stack[:0]
+		} else {
+			if cap(scratch.members)-memberBase < count {
+				next := make([]canonicalMember, memberBase, memberBase+count)
+				copy(next, scratch.members)
+				scratch.members = next
+			}
+			members = scratch.members[memberBase:memberBase : memberBase+count]
+		}
+		for {
+			keyNode, valNode, ok := iter.Next()
+			if !ok {
+				break
+			}
+			var key string
+			if b, ok := keyNode.StringBytes(); ok {
+				key = byteview.String(b)
+			} else {
+				start := len(scratch.keyBuf)
+				scratch.keyBuf, _ = keyNode.AppendText(scratch.keyBuf)
+				key = byteview.String(scratch.keyBuf[start:])
+			}
+			members = append(members, canonicalMember{key: key, node: valNode})
+		}
+		if count > len(stack) {
+			scratch.members = scratch.members[:memberBase+len(members)]
+		}
+		if len(members) <= 16 {
+			// Stable insertion sort for small objects.
+			for i := 1; i < len(members); i++ {
+				cur := members[i]
+				j := i - 1
+				for j >= 0 && members[j].key > cur.key {
+					members[j+1] = members[j]
+					j--
+				}
+				members[j+1] = cur
+			}
+		} else {
+			slices.SortStableFunc(members, func(a, b canonicalMember) int {
+				return cmp.Compare(a.key, b.key)
+			})
+		}
 		dst = append(dst, '{')
 		for i := range members {
 			if i > 0 {
 				dst = append(dst, ',')
 			}
-			dst = appendJSONString(dst, members[i].Key)
+			dst = appendJSONString(dst, members[i].key)
 			dst = append(dst, ':')
-			dst = appendCanonical(dst, members[i].Value)
+			dst = appendCanonicalNode(dst, members[i].node, scratch)
 		}
+		if count > len(stack) {
+			clear(scratch.members[memberBase : memberBase+len(members)])
+			scratch.members = scratch.members[:memberBase]
+		}
+		scratch.keyBuf = scratch.keyBuf[:keyBase]
 		return append(dst, '}')
 	default:
-		return v.AppendJSON(dst)
+		return dst
 	}
 }

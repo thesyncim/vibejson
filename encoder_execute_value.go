@@ -849,13 +849,6 @@ func typedValueIsEmpty(node *typedNode, src unsafe.Pointer) bool {
 	return false
 }
 
-func typedValueShouldOmit(node *typedNode, src unsafe.Pointer, omit typedOmit) bool {
-	if omit&typedOmitEmpty != 0 && typedValueIsEmpty(node, src) {
-		return true
-	}
-	return omit&typedOmitZero != 0 && typedValueIsZero(node, src, typedZeroMethod(omit>>typedOmitZeroMethodShift))
-}
-
 // typedValueIsZero matches encoding/json's omitzero rules. Method selection is
 // compiled into typedOmit, keeping reflection-based interface construction off
 // the ordinary field path and using it only when omitzero requests IsZero.

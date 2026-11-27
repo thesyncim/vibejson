@@ -31,7 +31,8 @@ func (e *encodeState) encodeStruct(node *typedNode, src unsafe.Pointer) error {
 			}
 		}
 		fieldSrc := unsafe.Add(fieldBase, encField.offset)
-		if encField.omit != 0 && typedValueShouldOmit(encField.node, fieldSrc, encField.omit) {
+		if encField.omit != 0 && ((encField.omit&typedOmitEmpty != 0 && typedValueIsEmpty(encField.node, fieldSrc)) ||
+			(encField.omit&typedOmitZero != 0 && typedValueIsZero(encField.node, fieldSrc, typedZeroMethod(encField.omit>>typedOmitZeroMethodShift)))) {
 			continue
 		}
 		name := encField.encName
@@ -153,7 +154,8 @@ func (e *encodeState) encodeNonAddressableStruct(node *typedNode, src unsafe.Poi
 			}
 		}
 		fieldSrc := unsafe.Add(fieldBase, field.offset)
-		if field.omit != 0 && typedValueShouldOmit(field.node, fieldSrc, field.omit) {
+		if field.omit != 0 && ((field.omit&typedOmitEmpty != 0 && typedValueIsEmpty(field.node, fieldSrc)) ||
+			(field.omit&typedOmitZero != 0 && typedValueIsZero(field.node, fieldSrc, typedZeroMethod(field.omit>>typedOmitZeroMethodShift)))) {
 			continue
 		}
 		name := field.encName

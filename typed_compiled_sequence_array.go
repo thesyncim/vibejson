@@ -1,6 +1,9 @@
 package vibejson
 
-import "unsafe"
+import (
+	"reflect"
+	"unsafe"
+)
 
 func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Pointer) error {
 	replace := cursor.flags&decoderReplace != 0
@@ -108,7 +111,7 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 			case typedMap:
 				elementErr = cursor.decodeCompiledMap(node.elem, element)
 			case typedAny:
-				elementErr = cursor.decodeCompiledAny(element)
+				elementErr = cursor.decodeCompiledAnyValue((*any)(element), false)
 			case typedBytes:
 				elementErr = cursor.decodeCompiledBytes(node.elem, element)
 			case typedUnmarshalerJSON:
@@ -118,7 +121,7 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 			case typedUnmarshalerSimd:
 				elementErr = cursor.decodeViaSimdHook(node.elem, element)
 			case typedIface:
-				elementErr = cursor.decodeCompiledIface(node.elem, element)
+				elementErr = cursor.decodeCompiledIfaceValue(node.elem, reflect.NewAt(node.elem.typ, element).Elem(), false)
 			default:
 				elementErr = cursor.decodeCompiled(node.elem, element)
 			}
@@ -325,7 +328,7 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 			case typedMap:
 				elementErr = cursor.decodeCompiledMap(node.elem, element)
 			case typedAny:
-				elementErr = cursor.decodeCompiledAny(element)
+				elementErr = cursor.decodeCompiledAnyValue((*any)(element), false)
 			case typedBytes:
 				elementErr = cursor.decodeCompiledBytes(node.elem, element)
 			case typedUnmarshalerJSON:
@@ -335,7 +338,7 @@ func (cursor *decoderCursor) decodeCompiledArrayStructural(node *typedNode, dst 
 			case typedUnmarshalerSimd:
 				elementErr = cursor.decodeViaSimdHook(node.elem, element)
 			case typedIface:
-				elementErr = cursor.decodeCompiledIface(node.elem, element)
+				elementErr = cursor.decodeCompiledIfaceValue(node.elem, reflect.NewAt(node.elem.typ, element).Elem(), false)
 			default:
 				elementErr = cursor.decodeCompiled(node.elem, element)
 			}

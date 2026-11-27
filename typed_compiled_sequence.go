@@ -97,7 +97,7 @@ func (cursor *decoderCursor) decodeCompiledSlice(node *typedNode, dst unsafe.Poi
 				// reused backing, exactly like encoding/json's MakeSlice(T,0,0).
 				// Keeping the old array would leak stale elements when the same
 				// destination later decodes a longer array into the reused cap.
-				setTypedEmptySlice(node, dst)
+				header.setEmptyIfNeeded()
 			}
 			return nil
 		}
@@ -167,7 +167,7 @@ func (cursor *decoderCursor) decodeCompiledSliceReceivers(node *typedNode, dst u
 		}
 		if !more {
 			if index == 0 {
-				setTypedEmptySlice(node, dst)
+				header.setEmptyIfNeeded()
 			}
 			return nil
 		}
@@ -285,7 +285,7 @@ func (cursor *decoderCursor) decodeCompiledSliceStructural(node *typedNode, dst 
 		}
 		if !more {
 			if index == 0 {
-				setTypedEmptySlice(node, dst)
+				header.setEmptyIfNeeded()
 			}
 			return nil
 		}
@@ -363,7 +363,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 						tape.index = token + 1
 						cursor.i = int(next) + 1
 						cursor.depth--
-						setTypedEmptySlice(node, dst)
+						header.setEmptyIfNeeded()
 						return nil
 					}
 				}
@@ -416,7 +416,7 @@ func (cursor *decoderCursor) decodeCompiledRecordSliceStructural(node, elem *typ
 			}
 			if !more {
 				if index == 0 {
-					setTypedEmptySlice(node, dst)
+					header.setEmptyIfNeeded()
 				} else {
 					header.setLen(index)
 				}

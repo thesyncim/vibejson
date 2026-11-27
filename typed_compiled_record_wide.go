@@ -1,6 +1,9 @@
 package vibejson
 
-import "unsafe"
+import (
+	"reflect"
+	"unsafe"
+)
 
 // decodeCompiledStructWide is the Replace-only body for records that need an
 // operation-local presence set: records wider than one word, and uncommon
@@ -112,7 +115,7 @@ func (cursor *decoderCursor) decodeCompiledStructWide(node *typedNode, dst unsaf
 		case typedOpMap:
 			fieldErr = cursor.decodeCompiledMap(fieldNode, fieldDst)
 		case typedOpAny:
-			fieldErr = cursor.decodeCompiledAny(fieldDst)
+			fieldErr = cursor.decodeCompiledAnyValue((*any)(fieldDst), false)
 		case typedOpBytes:
 			fieldErr = cursor.decodeCompiledBytes(fieldNode, fieldDst)
 		case typedOpQuoted:
@@ -127,7 +130,7 @@ func (cursor *decoderCursor) decodeCompiledStructWide(node *typedNode, dst unsaf
 				fieldErr = cursor.decodeViaTextUnmarshaler(fieldNode, fieldDst)
 			}
 		case typedOpIface:
-			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
+			fieldErr = cursor.decodeCompiledIfaceValue(fieldNode, reflect.NewAt(fieldNode.typ, fieldDst).Elem(), false)
 		default:
 			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)
 		}

@@ -2,6 +2,7 @@ package vibejson
 
 import (
 	"encoding/binary"
+	"reflect"
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/x/byteview"
@@ -637,7 +638,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 		case typedOpMap:
 			fieldErr = cursor.decodeCompiledMap(fieldNode, fieldDst)
 		case typedOpAny:
-			fieldErr = cursor.decodeCompiledAny(fieldDst)
+			fieldErr = cursor.decodeCompiledAnyValue((*any)(fieldDst), false)
 		case typedOpBytes:
 			fieldErr = cursor.decodeCompiledBytes(fieldNode, fieldDst)
 		case typedOpQuoted:
@@ -652,7 +653,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralSlow(node *typedNode,
 				fieldErr = cursor.decodeViaTextUnmarshaler(fieldNode, fieldDst)
 			}
 		case typedOpIface:
-			fieldErr = cursor.decodeCompiledIface(fieldNode, fieldDst)
+			fieldErr = cursor.decodeCompiledIfaceValue(fieldNode, reflect.NewAt(fieldNode.typ, fieldDst).Elem(), false)
 		// END GENERATED TYPED STRUCTURAL FIELD DISPATCH
 		default:
 			fieldErr = cursor.decodeCompiled(fieldNode, fieldDst)
