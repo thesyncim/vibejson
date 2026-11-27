@@ -259,12 +259,6 @@ func structuralColonGap(src []byte, closePosition, valuePosition int) bool {
 	return i == valuePosition
 }
 
-// structuralPackedColonTail accepts the two common key/value gaps.
-func structuralPackedColonTail(src []byte, closePosition, valuePosition int) bool {
-	gap := valuePosition - closePosition
-	return gap == 2 || gap == 3 && closePosition+2 < len(src) && src[closePosition+2] <= ' '
-}
-
 // structuralFirstValueGapOK verifies the colon-elided first value gap.
 func (c *decoderCursor) structuralFirstValueGapOK() bool {
 	tape := &c.state.structural
@@ -466,71 +460,6 @@ func (c *decoderCursor) matchNextObjectFieldStructuralExpected(expected *typedFi
 	tape.index = valueIndex
 	c.i = valuePosition
 	return structuralFieldMatched
-}
-
-// matchFirstObjectFieldStructuralShape is the positive-only first transition
-// for a compiled whole-object superinstruction. Packed plans up to six bytes
-// compare name, quote, and colon in one load; seven-byte names add one colon
-// check. Empty objects and uncommon formatting fail transactionally.
-func (c *decoderCursor) matchFirstObjectFieldStructuralShape(expected *typedField) bool {
-	tape := &c.state.structural
-	positions := tape.positions
-	index := tape.index + 1
-	valueIndex := index + 2
-	if uint(valueIndex) >= uint(len(positions)) {
-		return false
-	}
-	src := c.src
-	n := len(src)
-	pos := positions[index : valueIndex+1]
-	_ = pos[2]
-	openPosition := int(pos[0])
-	valuePosition := int(pos[2])
-	keyStart := openPosition + 1
-	if keyStart+8 > n || uint(openPosition) >= uint(n) || src[openPosition] != '"' ||
-		(binary.LittleEndian.Uint64(src[keyStart:keyStart+8])^expected.key)&expected.keyMask != 0 ||
-		expected.keyLen == 7 && (keyStart+8 >= n || src[keyStart+8] != ':') ||
-		!structuralPackedColonTail(src, keyStart+int(expected.keyLen), valuePosition) {
-		return false
-	}
-	tape.index = valueIndex
-	c.i = valuePosition
-	return true
-}
-
-// matchNextObjectFieldStructuralShape is the positive-only next transition
-// used by compiled whole-object superinstructions. The shape requires another
-// field in compile order, so early object ends and uncommon key forms fall
-// into the general decoder without paying for their branches on the hot path.
-func (c *decoderCursor) matchNextObjectFieldStructuralShape(expected *typedField) bool {
-	tape := &c.state.structural
-	positions := tape.positions
-	index := tape.index + 1
-	valueIndex := index + 3
-	if uint(valueIndex) >= uint(len(positions)) {
-		return false
-	}
-	src := c.src
-	n := len(src)
-	pos := positions[index : valueIndex+1]
-	_ = pos[3]
-	if uint(c.i) >= uint(n) || int(pos[0]) != c.i || src[c.i] != ',' {
-		return false
-	}
-	openPosition := int(pos[1])
-	valuePosition := int(pos[3])
-	keyStart := openPosition + 1
-	if keyStart+8 > n || uint(openPosition) >= uint(n) || src[openPosition] != '"' {
-		return false
-	}
-	if (binary.LittleEndian.Uint64(src[keyStart:keyStart+8])^expected.key)&expected.keyMask != 0 ||
-		expected.keyLen == 7 && (keyStart+8 >= n || src[keyStart+8] != ':') ||
-		!structuralPackedColonTail(src, keyStart+int(expected.keyLen), valuePosition) {
-		return false
-	}
-	tape.index = valueIndex
-	c.i = valuePosition
-	return true
 }
 
 func (c *decoderCursor) finishObjectStructural(first bool) bool {
