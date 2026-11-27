@@ -38,13 +38,17 @@ func stage1CursorBlocksSpecialized(src []byte, nblocks int, base uint32, st *Sta
 	carryStr := st.Carry.InString
 	follows := st.Follows
 	previousIn := st.PreviousIn
+	prevCloser := st.PrevCloser
 	nonASCII := st.NonASCII
-	var badBits, escapeBits uint64
+	var badBits, escapeBits, detachedColonBits uint64
 	if st.Bad {
 		badBits = 1
 	}
 	if st.Escaped {
 		escapeBits = 1
+	}
+	if st.DetachedColon {
+		detachedColonBits = 1
 	}
 	hiAll := zero
 	written := 0
@@ -126,6 +130,12 @@ func stage1CursorBlocksSpecialized(src []byte, nblocks int, base uint32, st *Sta
 		follows = cand >> 63
 		emit := (structural|starts)&outside | openers
 		closers := (inStr<<1 | previousIn) &^ inStr
+		if nonAttachedWs := (ws & outside) &^ (closers<<1 | prevCloser); detachedColonBits == 0 && nonAttachedWs != 0 {
+			if stage1BlockHasDetachedColon(b, nonAttachedWs) {
+				detachedColonBits = 1
+			}
+		}
+		prevCloser = closers >> 63
 		currentMask := emit | closers
 		previousIn = inStr >> 63
 		badBits |= control & (inStr | outside&^ws)
@@ -261,8 +271,10 @@ func stage1CursorBlocksSpecialized(src []byte, nblocks int, base uint32, st *Sta
 	st.Carry.InString = carryStr
 	st.Follows = follows
 	st.PreviousIn = previousIn
+	st.PrevCloser = prevCloser
 	st.Bad = badBits != 0
 	st.NonASCII = nonASCII || hiAll.ReduceMax() >= 0x80
 	st.Escaped = escapeBits != 0
+	st.DetachedColon = detachedColonBits != 0
 	return written
 }

@@ -1,5 +1,7 @@
 package kernels
 
+import "encoding/binary"
+
 // Provenance: CPP-STAGE1-001. The pipeline shape follows C++ simdjson 4.6.4
 // json_scanner and structural indexer at commit
 // 1bcf71bd85059ab6574ea1159de9298dcc1212c5; Apache-2.0, see
@@ -51,12 +53,14 @@ type Stage1Stream struct {
 // Stage1IndexStream carries the state for the packed structural-index
 // producer. The zero value is the document-start state.
 type Stage1IndexStream struct {
-	Carry      Stage1Carry
-	Follows    uint64
-	PreviousIn uint64
-	Bad        bool
-	NonASCII   bool
-	Escaped    bool
+	Carry         Stage1Carry
+	Follows       uint64
+	PreviousIn    uint64
+	PrevCloser    uint64
+	Bad           bool
+	NonASCII      bool
+	Escaped       bool
+	DetachedColon bool
 }
 
 // Stage1CursorMeta reports facts for only the current cursor chunk. The
@@ -116,4 +120,35 @@ func Stage1RecFromMasks(m *Stage1Masks, st *Stage1Stream, r *Stage1Rec) {
 	r.WsOut = m.Whitespace & outside
 	r.InStr = inString
 	r.NonASCII = m.NonASCII
+}
+
+// stage1Bit4ByteMask expands an 8-bit position mask into a 64-bit mask with
+// bit 4 (0x10) set in each selected byte lane. In cursor mode, ws contains
+// only JSON whitespace (0x09, 0x0a, 0x0d, 0x20 — all with bit 4 clear) and
+// ':' (0x3a — bit 4 set), so masking raw bytes with this table tests whether
+// any non-attached ws position is a detached colon in 8 branchless word ops.
+var stage1Bit4ByteMask = func() [256]uint64 {
+	var t [256]uint64
+	for m := 0; m < 256; m++ {
+		var mask uint64
+		for k := 0; k < 8; k++ {
+			if m&(1<<k) != 0 {
+				mask |= uint64(0x10) << (uint(k) * 8)
+			}
+		}
+		t[m] = mask
+	}
+	return t
+}()
+
+//go:noinline
+func stage1BlockHasDetachedColon(b *[64]byte, nonAttachedWs uint64) bool {
+	return (binary.LittleEndian.Uint64(b[0:8])&stage1Bit4ByteMask[byte(nonAttachedWs)] |
+		binary.LittleEndian.Uint64(b[8:16])&stage1Bit4ByteMask[byte(nonAttachedWs>>8)] |
+		binary.LittleEndian.Uint64(b[16:24])&stage1Bit4ByteMask[byte(nonAttachedWs>>16)] |
+		binary.LittleEndian.Uint64(b[24:32])&stage1Bit4ByteMask[byte(nonAttachedWs>>24)] |
+		binary.LittleEndian.Uint64(b[32:40])&stage1Bit4ByteMask[byte(nonAttachedWs>>32)] |
+		binary.LittleEndian.Uint64(b[40:48])&stage1Bit4ByteMask[byte(nonAttachedWs>>40)] |
+		binary.LittleEndian.Uint64(b[48:56])&stage1Bit4ByteMask[byte(nonAttachedWs>>48)] |
+		binary.LittleEndian.Uint64(b[56:64])&stage1Bit4ByteMask[byte(nonAttachedWs>>56)]) != 0
 }

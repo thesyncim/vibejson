@@ -37,9 +37,11 @@ func stage1IndexBlocksAVX2(src []byte, nblocks int, base uint32, st *Stage1Index
 	carry := st.Carry
 	follows := st.Follows
 	previousIn := st.PreviousIn
+	prevCloser := st.PrevCloser
 	bad := st.Bad
 	nonASCII := st.NonASCII
 	hasEscapes := st.Escaped
+	detachedColon := st.DetachedColon
 	written := 0
 
 	loTable := archsimd.LoadUint8x32Array(&stage1ClassLoAVX2)
@@ -85,6 +87,14 @@ func stage1IndexBlocksAVX2(src []byte, nblocks int, base uint32, st *Stage1Index
 		emit := (masks.Structural|starts)&outside | openers
 		closers := (inString<<1 | previousIn) &^ inString
 		previousIn = inString >> 63
+		if mode == stage1PortableIndexCursor {
+			if nonAttachedWs := (masks.Whitespace & outside) &^ (closers<<1 | prevCloser); !detachedColon && nonAttachedWs != 0 {
+				if stage1BlockHasDetachedColon(b, nonAttachedWs) {
+					detachedColon = true
+				}
+			}
+			prevCloser = closers >> 63
+		}
 
 		mask := emit
 		if mode != stage1PortableIndexValid {
@@ -134,9 +144,11 @@ func stage1IndexBlocksAVX2(src []byte, nblocks int, base uint32, st *Stage1Index
 	st.Carry = carry
 	st.Follows = follows
 	st.PreviousIn = previousIn
+	st.PrevCloser = prevCloser
 	st.Bad = bad
 	st.NonASCII = nonASCII
 	st.Escaped = hasEscapes
+	st.DetachedColon = detachedColon
 	archsimd.ClearAVXUpperBits()
 	return written
 }

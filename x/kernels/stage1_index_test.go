@@ -268,8 +268,47 @@ func TestStage1CursorBlocksOmitsOnlyColons(t *testing.T) {
 		if !reflect.DeepEqual(compact, filtered) {
 			t.Fatalf("trial %d compact index mismatch\ngot  %v\nwant %v", trial, compact, filtered)
 		}
-		if compactState != fullState {
+		if compactState.Carry != fullState.Carry ||
+			compactState.Follows != fullState.Follows ||
+			compactState.PreviousIn != fullState.PreviousIn ||
+			compactState.Bad != fullState.Bad ||
+			compactState.NonASCII != fullState.NonASCII ||
+			compactState.Escaped != fullState.Escaped {
 			t.Fatalf("trial %d state mismatch: compact=%+v full=%+v", trial, compactState, fullState)
 		}
+		if wantDetached := hasDetachedColonReference(src); compactState.DetachedColon != wantDetached {
+			t.Fatalf("trial %d detached colon mismatch: got=%v want=%v", trial, compactState.DetachedColon, wantDetached)
+		}
 	}
+}
+
+func hasDetachedColonReference(src []byte) bool {
+	inString := false
+	escaped := false
+	prevWasCloser := false
+	for _, b := range src {
+		if inString {
+			if escaped {
+				escaped = false
+			} else if b == '\\' {
+				escaped = true
+			} else if b == '"' {
+				inString = false
+				prevWasCloser = true
+				continue
+			}
+			prevWasCloser = false
+			continue
+		}
+		if b == '"' {
+			inString = true
+			prevWasCloser = false
+			continue
+		}
+		if b == ':' && !prevWasCloser {
+			return true
+		}
+		prevWasCloser = false
+	}
+	return false
 }

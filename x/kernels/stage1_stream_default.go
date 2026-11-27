@@ -126,9 +126,11 @@ func stage1IndexBlocksPortable(src []byte, nblocks int, base uint32, st *Stage1I
 	carry := st.Carry
 	follows := st.Follows
 	previousIn := st.PreviousIn
+	prevCloser := st.PrevCloser
 	bad := st.Bad
 	nonASCII := st.NonASCII
 	hasEscapes := st.Escaped
+	detachedColon := st.DetachedColon
 	written := 0
 
 	for block := 0; block < nblocks && len(src) >= 64; block, src = block+1, src[64:] {
@@ -153,7 +155,12 @@ func stage1IndexBlocksPortable(src []byte, nblocks int, base uint32, st *Stage1I
 			mask |= closers
 		}
 		if mode == stage1PortableIndexCursor {
-			mask &^= stage1BlockByteMaskPortable(bytes, ':')
+			colons := stage1BlockByteMaskPortable(bytes, ':')
+			mask &^= colons
+			if (colons&outside)&^(closers<<1|prevCloser) != 0 {
+				detachedColon = true
+			}
+			prevCloser = closers >> 63
 		}
 
 		escInString := escaped & inString
@@ -198,9 +205,11 @@ func stage1IndexBlocksPortable(src []byte, nblocks int, base uint32, st *Stage1I
 	st.Carry = carry
 	st.Follows = follows
 	st.PreviousIn = previousIn
+	st.PrevCloser = prevCloser
 	st.Bad = bad
 	st.NonASCII = nonASCII
 	st.Escaped = hasEscapes
+	st.DetachedColon = detachedColon
 	return written
 }
 
