@@ -675,13 +675,6 @@ func (c *decoderCursor) ownedText(text string) string {
 }
 
 func (c *decoderCursor) skipSpace() {
-	if c.state != nil && c.state.structuralActive {
-		if uint(c.i) >= uint(len(c.src)) || !IsJSONWhitespace(c.src[c.i]) {
-			return
-		}
-		c.i = c.state.structural.position(c.i, len(c.src))
-		return
-	}
 	c.i = SkipSpace(c.src, c.i)
 }
 

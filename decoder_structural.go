@@ -260,6 +260,50 @@ func structuralColonGap(src []byte, closePosition, valuePosition int) bool {
 	return i == valuePosition
 }
 
+// structuralGapClean reports whether src[start:end] contains no elided colon.
+// Stage 1 cursor mode omits ':' from structural positions, so any non-empty
+// gap between consumed input and the next structural position must be checked
+// where ':' is illegal. On compact JSON start == end and this inlines to one
+// compare.
+func structuralGapClean(src []byte, start, end int) bool {
+	if start == end {
+		return true
+	}
+	return structuralGapCleanNonEmpty(src, start, end)
+}
+
+// structuralGapCleanNonEmpty checks non-empty whitespace gaps using the fact
+// that all JSON whitespace bytes (0x09, 0x0a, 0x0d, 0x20) have bit 4 (0x10)
+// clear while ':' (0x3a) has bit 4 set.
+//
+//go:noinline
+func structuralGapCleanNonEmpty(src []byte, start, end int) bool {
+	if uint(start) > uint(end) || uint(end) > uint(len(src)) {
+		return false
+	}
+	gap := end - start
+	if gap <= 8 && start+8 <= len(src) {
+		mask := uint64(0x1010101010101010) >> (uint(8-gap) * 8)
+		return binary.LittleEndian.Uint64(src[start:start+8])&mask == 0
+	}
+	if gap >= 8 && gap <= 16 {
+		return (binary.LittleEndian.Uint64(src[start:start+8])|
+			binary.LittleEndian.Uint64(src[end-8:end]))&0x1010101010101010 == 0
+	}
+	for start+8 <= end {
+		if binary.LittleEndian.Uint64(src[start:start+8])&0x1010101010101010 != 0 {
+			return false
+		}
+		start += 8
+	}
+	for ; start < end; start++ {
+		if src[start] == ':' {
+			return false
+		}
+	}
+	return true
+}
+
 // structuralFirstValueGapOK verifies the colon-elided first value gap.
 func (c *decoderCursor) structuralFirstValueGapOK() bool {
 	tape := &c.state.structural
@@ -314,9 +358,10 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 		}
 	}
 	position := int(positions[index])
-	if uint(position) >= uint(n) {
+	if uint(position) >= uint(n) || !structuralGapClean(src, c.i, position) {
 		return "", structuralFieldSlow
 	}
+	gapStart := c.i
 	if !first {
 		switch src[position] {
 		case '}':
@@ -325,6 +370,7 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 			c.depth--
 			return "", structuralFieldEnd
 		case ',':
+			gapStart = position + 1
 			index++
 		default:
 			return "", structuralFieldSlow
@@ -348,6 +394,7 @@ func (c *decoderCursor) matchObjectFieldStructural(first bool, expected *typedFi
 	keyStart := openPosition + 1
 	if uint(openPosition) >= uint(n) || uint(closePosition) >= uint(n) ||
 		closePosition < keyStart ||
+		!structuralGapClean(src, gapStart, openPosition) ||
 		src[openPosition] != '"' || src[closePosition] != '"' ||
 		!structuralColonGap(src, closePosition, valuePosition) {
 		return "", structuralFieldSlow
@@ -385,7 +432,7 @@ func (c *decoderCursor) matchFirstObjectFieldStructuralExpected(expected *typedF
 	_ = pos[2]
 	openPosition := int(pos[0])
 	src := c.src
-	if uint(openPosition) >= uint(len(src)) {
+	if uint(openPosition) >= uint(len(src)) || !structuralGapClean(src, c.i, openPosition) {
 		return structuralFieldSlow
 	}
 	if src[openPosition] == '}' {
@@ -430,7 +477,7 @@ func (c *decoderCursor) matchNextObjectFieldStructuralExpected(expected *typedFi
 		}
 	}
 	delimiterPosition := int(positions[index])
-	if uint(delimiterPosition) >= uint(len(src)) {
+	if uint(delimiterPosition) >= uint(len(src)) || !structuralGapClean(src, c.i, delimiterPosition) {
 		return structuralFieldSlow
 	}
 	switch src[delimiterPosition] {
@@ -456,6 +503,7 @@ func (c *decoderCursor) matchNextObjectFieldStructuralExpected(expected *typedFi
 	keyStart := openPosition + 1
 	if keyStart+8 > len(src) || closePosition-keyStart != int(expected.keyLen) ||
 		uint(openPosition) >= uint(len(src)) || uint(closePosition) >= uint(len(src)) ||
+		!structuralGapClean(src, delimiterPosition+1, openPosition) ||
 		src[openPosition] != '"' || src[closePosition] != '"' ||
 		!structuralColonGap(src, closePosition, valuePosition) {
 		return structuralFieldSlow
@@ -486,7 +534,7 @@ func (c *decoderCursor) finishObjectStructural(first bool) bool {
 		}
 	}
 	position := int(tape.positions[index])
-	if uint(position) >= uint(len(src)) || src[position] != '}' {
+	if uint(position) >= uint(len(src)) || src[position] != '}' || !structuralGapClean(src, c.i, position) {
 		return false
 	}
 	tape.index = index
@@ -517,7 +565,13 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 	}
 	index, position, exists := tape.seekFrom(tape.index, c.i, n)
 	if !exists {
+		if !structuralGapClean(src, c.i, n) {
+			return "", false, false, false, nil
+		}
 		return "", false, false, true, c.err(position, "unterminated object")
+	}
+	if !structuralGapClean(src, c.i, position) {
+		return "", false, false, false, nil
 	}
 	if first {
 		if src[position] == '}' {
@@ -534,11 +588,18 @@ func (c *decoderCursor) nextObjectFieldStructural(first bool, expected *typedFie
 			c.depth--
 			return "", false, false, true, nil
 		case ',':
+			commaPos := position
 			index++
 			if index >= len(tape.positions) {
+				if !structuralGapClean(src, commaPos+1, n) {
+					return "", false, false, false, nil
+				}
 				return "", false, false, true, c.err(position, "unterminated object")
 			}
 			position = int(tape.positions[index])
+			if !structuralGapClean(src, commaPos+1, position) {
+				return "", false, false, false, nil
+			}
 		default:
 			return "", false, false, true, c.err(position, "expected comma or closing brace in object")
 		}
@@ -604,7 +665,13 @@ func (c *decoderCursor) nextArrayElementStructural(first bool) (more, handled bo
 	}
 	index, position, exists := tape.seekFrom(tape.index, c.i, n)
 	if !exists {
+		if !structuralGapClean(src, c.i, n) {
+			return false, false, nil
+		}
 		return false, true, c.err(position, "unterminated array")
+	}
+	if !structuralGapClean(src, c.i, position) {
+		return false, false, nil
 	}
 	if src[position] == ']' {
 		tape.index = index
@@ -616,11 +683,18 @@ func (c *decoderCursor) nextArrayElementStructural(first bool) (more, handled bo
 		if src[position] != ',' {
 			return false, true, c.err(position, "expected comma or closing bracket in array")
 		}
+		commaPos := position
 		index++
 		if index >= len(tape.positions) {
+			if !structuralGapClean(src, commaPos+1, n) {
+				return false, false, nil
+			}
 			return false, true, c.err(position, "unterminated array")
 		}
 		position = int(tape.positions[index])
+		if !structuralGapClean(src, commaPos+1, position) {
+			return false, false, nil
+		}
 	}
 	tape.index = index
 	c.i = position
@@ -646,7 +720,7 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 		}
 	}
 	position := int(positions[index])
-	if uint(position) >= uint(n) {
+	if uint(position) >= uint(n) || !structuralGapClean(src, c.i, position) {
 		return structuralFieldSlow
 	}
 	if src[position] == ']' {
@@ -659,12 +733,13 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 		if src[position] != ',' {
 			return structuralFieldSlow
 		}
+		commaPos := position
 		index++
 		if uint(index) >= uint(len(positions)) {
 			return structuralFieldSlow
 		}
 		position = int(positions[index])
-		if uint(position) >= uint(n) || src[position] == ']' {
+		if uint(position) >= uint(n) || src[position] == ']' || !structuralGapClean(src, commaPos+1, position) {
 			return structuralFieldSlow
 		}
 	}
@@ -674,13 +749,7 @@ func (c *decoderCursor) nextArrayElementExact(first bool) uint8 {
 }
 
 func (c *decoderCursor) skipSpaceAt(i int) int {
-	if c.state == nil || !c.state.structuralActive {
-		return skipSpaceIndent(c.src, i)
-	}
-	if uint(i) >= uint(len(c.src)) || c.src[i] > ' ' {
-		return i
-	}
-	return c.state.structural.position(i, len(c.src))
+	return skipSpaceIndent(c.src, i)
 }
 
 func (c *decoderCursor) structuralStringEnd(start int) (end int, ok bool) {
