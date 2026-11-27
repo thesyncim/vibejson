@@ -37,12 +37,26 @@ func validUTF8NoLineSeparatorFast(src []byte) bool {
 }
 
 func copyStringPrefix(dst, src []byte) int {
+	if len(dst) < len(src) {
+		return -1
+	}
+	dst = dst[:len(src)]
+	if slicesOverlap(dst, src) {
+		return -1
+	}
 	end := scanStringSpecialScalar(src, 0)
 	copy(dst, src[:end])
 	return end
 }
 
 func copyHTMLStringPrefix(dst, src []byte) int {
+	if len(dst) < len(src) {
+		return -1
+	}
+	dst = dst[:len(src)]
+	if slicesOverlap(dst, src) {
+		return -1
+	}
 	end := scanEncodedHTMLSpecialScalar(src, 0)
 	copy(dst, src[:end])
 	return end

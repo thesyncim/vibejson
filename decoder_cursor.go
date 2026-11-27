@@ -534,9 +534,24 @@ func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) 
 	if i >= n || !IsDigit(src[i]) {
 		return 0, start, false
 	}
-	value = float64(src[i] - '0')
-	i++
+	var mantissa uint64
+	digits := 1
+	if src[i] == '0' {
+		i++
+	} else {
+		mantissa = uint64(src[i] - '0')
+		i++
+		for i < n && IsDigit(src[i]) {
+			if digits >= 15 {
+				return 0, start, false
+			}
+			mantissa = mantissa*10 + uint64(src[i]-'0')
+			digits++
+			i++
+		}
+	}
 	if typedNumberEnd(src, i) {
+		value = float64(mantissa)
 		if negative {
 			value = -value
 		}
@@ -551,8 +566,20 @@ func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) 
 		if i >= n || !IsDigit(src[i]) {
 			return 0, start, false
 		}
-		value += float64(src[i]-'0') / 10
-		i++
+		frac := 0
+		for i < n && IsDigit(src[i]) {
+			if digits >= 15 {
+				return 0, start, false
+			}
+			mantissa = mantissa*10 + uint64(src[i]-'0')
+			digits++
+			frac++
+			i++
+		}
+		if !typedNumberEnd(src, i) {
+			return 0, start, false
+		}
+		value = float64(mantissa) / anyPow10[frac]
 	case 'e', 'E':
 		i++
 		exponentNegative := false
@@ -564,16 +591,17 @@ func shortTypedFloatAt(src []byte, start int) (value float64, end int, ok bool) 
 			return 0, start, false
 		}
 		exponent := int(src[i] - '0')
+		i++
+		if !typedNumberEnd(src, i) {
+			return 0, start, false
+		}
+		value = float64(mantissa)
 		if exponentNegative {
 			value /= anyPow10[exponent]
 		} else {
 			value *= anyPow10[exponent]
 		}
-		i++
 	default:
-		return 0, start, false
-	}
-	if !typedNumberEnd(src, i) {
 		return 0, start, false
 	}
 	if negative {
