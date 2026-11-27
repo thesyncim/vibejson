@@ -561,6 +561,13 @@ func renderUnmarshal(buf *bytes.Buffer, s structSpec, qual, fieldVar string) {
 	fmt.Fprintln(buf)
 }
 
+func derefExpr(ptrExpr string) string {
+	if strings.HasPrefix(ptrExpr, "&") {
+		return ptrExpr[1:]
+	}
+	return "*(" + ptrExpr + ")"
+}
+
 func emitDecodeInto(buf *bytes.Buffer, dstPtrExpr string, ft fieldType, curExpr string, depth int, returnCursor bool) {
 	ind := strings.Repeat("\t", depth)
 	retErr := func(errVar string) string {
@@ -570,6 +577,7 @@ func emitDecodeInto(buf *bytes.Buffer, dstPtrExpr string, ft fieldType, curExpr 
 		return fmt.Sprintf("return %s", errVar)
 	}
 	cDot := "c."
+	valExpr := derefExpr(dstPtrExpr)
 
 	switch ft.kind {
 	case kindBool:
@@ -591,12 +599,12 @@ func emitDecodeInto(buf *bytes.Buffer, dstPtrExpr string, ft fieldType, curExpr 
 	case kindPointer:
 		pVar := fmt.Sprintf("p%d", depth)
 		fmt.Fprintf(buf, "%sif null, err := %sNull(); err != nil {\n%s\t%s\n%s} else if null {\n", ind, cDot, ind, retErr("err"), ind)
-		fmt.Fprintf(buf, "%s\t*(%s) = nil\n", ind, dstPtrExpr)
+		fmt.Fprintf(buf, "%s\t%s = nil\n", ind, valExpr)
 		fmt.Fprintf(buf, "%s} else {\n", ind)
-		fmt.Fprintf(buf, "%s\t%s := *(%s)\n", ind, pVar, dstPtrExpr)
+		fmt.Fprintf(buf, "%s\t%s := %s\n", ind, pVar, valExpr)
 		fmt.Fprintf(buf, "%s\tif %s == nil {\n", ind, pVar)
 		fmt.Fprintf(buf, "%s\t\t%s = new(%s)\n", ind, pVar, ft.elem.typeName)
-		fmt.Fprintf(buf, "%s\t\t*(%s) = %s\n", ind, dstPtrExpr, pVar)
+		fmt.Fprintf(buf, "%s\t\t%s = %s\n", ind, valExpr, pVar)
 		fmt.Fprintf(buf, "%s\t}\n", ind)
 		emitDecodeInto(buf, pVar, *ft.elem, curExpr, depth+1, returnCursor)
 		fmt.Fprintf(buf, "%s}\n", ind)
@@ -605,20 +613,20 @@ func emitDecodeInto(buf *bytes.Buffer, dstPtrExpr string, ft fieldType, curExpr 
 		eVar := fmt.Sprintf("e%d", depth)
 		fVar := fmt.Sprintf("first%d", depth)
 		fmt.Fprintf(buf, "%sif null, err := %sNull(); err != nil {\n%s\t%s\n%s} else if null {\n", ind, cDot, ind, retErr("err"), ind)
-		fmt.Fprintf(buf, "%s\t*(%s) = nil\n", ind, dstPtrExpr)
+		fmt.Fprintf(buf, "%s\t%s = nil\n", ind, valExpr)
 		fmt.Fprintf(buf, "%s} else {\n", ind)
 		fmt.Fprintf(buf, "%s\tif err := %sBeginArray(%q); err != nil {\n%s\t\t%s\n%s\t}\n", ind, cDot, ft.typeName, ind, retErr("err"), ind)
-		fmt.Fprintf(buf, "%s\t%s := (*(%s))[:0]\n", ind, sVar, dstPtrExpr)
+		fmt.Fprintf(buf, "%s\t%s := (%s)[:0]\n", ind, sVar, valExpr)
 		fmt.Fprintf(buf, "%s\tif %s == nil {\n%s\t\t%s = make(%s, 0)\n%s\t}\n", ind, sVar, ind, sVar, ft.typeName, ind)
 		fmt.Fprintf(buf, "%s\tfor %s := true; ; %s = false {\n", ind, fVar, fVar)
 		fmt.Fprintf(buf, "%s\t\tmore, err := %sNextElement(%s)\n", ind, cDot, fVar)
-		fmt.Fprintf(buf, "%s\t\tif err != nil {\n%s\t\t\t*(%s) = %s\n%s\t\t\t%s\n%s\t\t}\n", ind, ind, dstPtrExpr, sVar, ind, retErr("err"), ind)
+		fmt.Fprintf(buf, "%s\t\tif err != nil {\n%s\t\t\t%s = %s\n%s\t\t\t%s\n%s\t\t}\n", ind, ind, valExpr, sVar, ind, retErr("err"), ind)
 		fmt.Fprintf(buf, "%s\t\tif !more {\n%s\t\t\tbreak\n%s\t\t}\n", ind, ind, ind)
 		fmt.Fprintf(buf, "%s\t\tvar %s %s\n", ind, eVar, ft.elem.typeName)
 		emitDecodeInto(buf, "&"+eVar, *ft.elem, curExpr, depth+2, returnCursor)
 		fmt.Fprintf(buf, "%s\t\t%s = append(%s, %s)\n", ind, sVar, sVar, eVar)
 		fmt.Fprintf(buf, "%s\t}\n", ind)
-		fmt.Fprintf(buf, "%s\t*(%s) = %s\n", ind, dstPtrExpr, sVar)
+		fmt.Fprintf(buf, "%s\t%s = %s\n", ind, valExpr, sVar)
 		fmt.Fprintf(buf, "%s}\n", ind)
 	case kindArray:
 		idxVar := fmt.Sprintf("idx%d", depth)

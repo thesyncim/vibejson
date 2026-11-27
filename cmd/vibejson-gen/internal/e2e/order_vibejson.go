@@ -150,19 +150,19 @@ func (v *Order) UnmarshalVibeJSON(c vibejson.DecodeCursor) (vibejson.DecodeCurso
 							if null, err := c.Null(); err != nil {
 								return c, err
 							} else if null {
-								*(&v.Tags) = nil
+								v.Tags = nil
 							} else {
 								if err := c.BeginArray("[]string"); err != nil {
 									return c, err
 								}
-								s7 := (*(&v.Tags))[:0]
+								s7 := (v.Tags)[:0]
 								if s7 == nil {
 									s7 = make([]string, 0)
 								}
 								for first7 := true; ; first7 = false {
 									more, err := c.NextElement(first7)
 									if err != nil {
-										*(&v.Tags) = s7
+										v.Tags = s7
 										return c, err
 									}
 									if !more {
@@ -174,18 +174,18 @@ func (v *Order) UnmarshalVibeJSON(c vibejson.DecodeCursor) (vibejson.DecodeCurso
 									}
 									s7 = append(s7, e7)
 								}
-								*(&v.Tags) = s7
+								v.Tags = s7
 							}
 							if c.Field(false, _vibejsonFieldsOrder.Field(6)) {
 								if null, err := c.Null(); err != nil {
 									return c, err
 								} else if null {
-									*(&v.Shipping) = nil
+									v.Shipping = nil
 								} else {
-									p8 := *(&v.Shipping)
+									p8 := v.Shipping
 									if p8 == nil {
 										p8 = new(Address)
-										*(&v.Shipping) = p8
+										v.Shipping = p8
 									}
 									{
 										next, err := (p8).UnmarshalVibeJSON(c)
@@ -304,19 +304,19 @@ func (v *Order) unmarshalVibeJSONRest(c *vibejson.DecodeCursor, first bool) erro
 			if null, err := c.Null(); err != nil {
 				return err
 			} else if null {
-				*(&v.Tags) = nil
+				v.Tags = nil
 			} else {
 				if err := c.BeginArray("[]string"); err != nil {
 					return err
 				}
-				s3 := (*(&v.Tags))[:0]
+				s3 := (v.Tags)[:0]
 				if s3 == nil {
 					s3 = make([]string, 0)
 				}
 				for first3 := true; ; first3 = false {
 					more, err := c.NextElement(first3)
 					if err != nil {
-						*(&v.Tags) = s3
+						v.Tags = s3
 						return err
 					}
 					if !more {
@@ -328,18 +328,18 @@ func (v *Order) unmarshalVibeJSONRest(c *vibejson.DecodeCursor, first bool) erro
 					}
 					s3 = append(s3, e3)
 				}
-				*(&v.Tags) = s3
+				v.Tags = s3
 			}
 		case 6:
 			if null, err := c.Null(); err != nil {
 				return err
 			} else if null {
-				*(&v.Shipping) = nil
+				v.Shipping = nil
 			} else {
-				p3 := *(&v.Shipping)
+				p3 := v.Shipping
 				if p3 == nil {
 					p3 = new(Address)
-					*(&v.Shipping) = p3
+					v.Shipping = p3
 				}
 				{
 					next, err := (p3).UnmarshalVibeJSON(*c)

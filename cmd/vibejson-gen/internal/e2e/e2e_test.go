@@ -121,8 +121,7 @@ func BenchmarkGeneratedOrderEncodeStdlib(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		out, err = json.Marshal(&v)
-		if err != nil {
+		if _, err = json.Marshal(&v); err != nil {
 			b.Fatal(err)
 		}
 	}
