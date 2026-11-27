@@ -878,7 +878,7 @@ func TestEncodeFloat64ArrayNegativeDecimals(t *testing.T) {
 		Pair   [2]float64 `json:"pair"`
 		Values [7]float64 `json:"values"`
 	}
-	negZero := -0.0
+	negZero := math.Copysign(0, -1)
 	input := []coord{
 		{
 			Pair:   [2]float64{-112.5, 74.99601000000001},
