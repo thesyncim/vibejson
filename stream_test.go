@@ -604,6 +604,39 @@ func BenchmarkStreamReadNDJSON(b *testing.B) {
 	}
 }
 
+func BenchmarkStreamReadNDJSONReused(b *testing.B) {
+	var data bytes.Buffer
+	{
+		enc, _ := CompileEncoder[streamRecord](EncoderOptions{})
+		w := NewWriter(&data)
+		for i := 0; i < 512; i++ {
+			v := streamRecordAt(i)
+			EncodeTo(w, enc, &v)
+			w.Newline()
+		}
+		w.Close()
+	}
+	dec, _ := CompileDecoder[streamRecord](DecoderOptions{ZeroCopy: true})
+	src := bytes.NewReader(data.Bytes())
+	r := NewReader(src)
+	b.SetBytes(int64(data.Len()))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		src.Reset(data.Bytes())
+		r.Reset(src)
+		var got streamRecord
+		for r.Next() {
+			if err := DecodeFrom(r, dec, &got); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if r.Err() != nil {
+			b.Fatal(r.Err())
+		}
+	}
+}
+
 func BenchmarkStreamReadNDJSONStdlib(b *testing.B) {
 	var data bytes.Buffer
 	{
@@ -659,5 +692,110 @@ func TestStreamReaderLinearOnChunkedValue(t *testing.T) {
 				t.Fatalf("framing a %d-byte value in 512-byte chunks took %v; the quadratic re-scan regressed", len(tc.data), elapsed)
 			}
 		})
+	}
+}
+
+func TestReaderResetReuseAndRetention(t *testing.T) {
+	r, err := NewReaderWithOptions(strings.NewReader(`{"a":1}`+"\n"+`{"a":2}`), ReaderOptions{MaxValueBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Next() || string(r.Bytes()) != `{"a":1}` {
+		t.Fatalf("first stream value 1: ok=%v bytes=%q err=%v", r.hasValue, r.Bytes(), r.Err())
+	}
+	bufPtr := &r.buf[0]
+
+	// Reset mid-stream clears state, reuses buffer, and preserves MaxValueBytes.
+	r.Reset(strings.NewReader(`{"b":3}`))
+	if &r.buf[0] != bufPtr {
+		t.Fatal("Reader.Reset did not reuse normal-sized rolling buffer")
+	}
+	if r.maxValue != 1024 {
+		t.Fatalf("Reader.Reset lost MaxValueBytes: got %d, want 1024", r.maxValue)
+	}
+	if !r.Next() || string(r.Bytes()) != `{"b":3}` || r.InputOffset() != 7 {
+		t.Fatalf("second stream: bytes=%q offset=%d err=%v", r.Bytes(), r.InputOffset(), r.Err())
+	}
+
+	// Reset clears sticky errors and closed state.
+	r.Reset(strings.NewReader(`{invalid`))
+	if r.Next() || r.Err() == nil {
+		t.Fatalf("expected error on invalid stream, got err=%v", r.Err())
+	}
+	_ = r.Close()
+	r.Reset(strings.NewReader(`[1,2,3]`))
+	if !r.Next() || string(r.Bytes()) != `[1,2,3]` || r.Err() != nil {
+		t.Fatalf("post-Close Reset failed: bytes=%q err=%v", r.Bytes(), r.Err())
+	}
+
+	// Oversized buffer is released back to defaultReaderSize on Reset.
+	big := `"` + strings.Repeat("x", 5*defaultReaderSize) + `"`
+	r2 := NewReader(strings.NewReader(big))
+	if !r2.Next() || r2.Err() != nil {
+		t.Fatalf("oversized read failed: err=%v", r2.Err())
+	}
+	if len(r2.buf) <= 4*defaultReaderSize {
+		t.Fatalf("expected buffer growth > %d, got %d", 4*defaultReaderSize, len(r2.buf))
+	}
+	r2.Reset(strings.NewReader(`1`))
+	if len(r2.buf) != defaultReaderSize {
+		t.Fatalf("oversized buffer retained after Reset: got %d, want %d", len(r2.buf), defaultReaderSize)
+	}
+	if !r2.Next() || string(r2.Bytes()) != `1` {
+		t.Fatalf("post-shrink Reset failed: bytes=%q err=%v", r2.Bytes(), r2.Err())
+	}
+}
+
+func TestWriterResetReuseAndRetention(t *testing.T) {
+	var out1, out2 bytes.Buffer
+	w := NewWriter(&out1)
+	w.SetEscapeHTML(false)
+	if err := w.BeginObject(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Key("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.String("<ok>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.EndObject(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if out1.String() != `{"a":"<ok>"}` {
+		t.Fatalf("first stream = %q", out1.String())
+	}
+	bufPtr := &w.buf[:1][0]
+
+	// Reset clears sticky errors and unfinished nesting while preserving settings and buffer.
+	_ = w.EndObject() // induces sticky error
+	if w.Err() == nil {
+		t.Fatal("expected sticky error")
+	}
+	w.Reset(&out2)
+	if w.Err() != nil {
+		t.Fatalf("Writer.Reset did not clear error: %v", w.Err())
+	}
+	if &w.buf[:1][0] != bufPtr {
+		t.Fatal("Writer.Reset did not reuse normal-sized buffer")
+	}
+	if err := w.String("<still-unescaped>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if out2.String() != `"<still-unescaped>"` {
+		t.Fatalf("second stream = %q", out2.String())
+	}
+
+	// Oversized output buffer is released on Reset.
+	w.buf = make([]byte, 0, 5*defaultWriterSize)
+	w.Reset(&out2)
+	if cap(w.buf) != defaultWriterSize {
+		t.Fatalf("oversized writer buffer retained after Reset: cap=%d, want %d", cap(w.buf), defaultWriterSize)
 	}
 }
