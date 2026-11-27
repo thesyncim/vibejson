@@ -1,4 +1,6 @@
-package vibejson
+package jsoncmp
+
+import "github.com/thesyncim/vibejson/x/byteview"
 
 // decNumber is an exact, source-backed decimal decomposition.
 type decNumber struct {
@@ -13,18 +15,27 @@ type decNumber struct {
 	adj               int64
 }
 
-func parseDecNumber(src []byte) decNumber {
+func parseDecNumber(src []byte) (decNumber, bool) {
+	if len(src) == 0 {
+		return decNumber{}, false
+	}
 	var d decNumber
 	i := 0
 	if src[i] == '-' {
 		d.neg = true
 		i++
+		if i >= len(src) {
+			return decNumber{}, false
+		}
 	}
 	intStart := i
 	for i < len(src) && src[i] >= '0' && src[i] <= '9' {
 		i++
 	}
 	intEnd := i
+	if intEnd == intStart {
+		return decNumber{}, false
+	}
 	d.dot = -1
 	fracStart, fracEnd := 0, 0
 	if i < len(src) && src[i] == '.' {
@@ -35,21 +46,40 @@ func parseDecNumber(src []byte) decNumber {
 			i++
 		}
 		fracEnd = i
+		if fracEnd == fracStart {
+			return decNumber{}, false
+		}
 	}
 	d.expFits = true
 	var exp int64
 	if i < len(src) {
+		if src[i] != 'e' && src[i] != 'E' {
+			return decNumber{}, false
+		}
 		i++
+		if i >= len(src) {
+			return decNumber{}, false
+		}
 		if src[i] == '+' {
 			i++
 		} else if src[i] == '-' {
 			d.expNeg = true
 			i++
 		}
+		if i >= len(src) || src[i] < '0' || src[i] > '9' {
+			return decNumber{}, false
+		}
 		for i < len(src) && src[i] == '0' {
 			i++
 		}
-		d.expDigits = src[i:]
+		expStart := i
+		for i < len(src) && src[i] >= '0' && src[i] <= '9' {
+			i++
+		}
+		if i != len(src) {
+			return decNumber{}, false
+		}
+		d.expDigits = src[expStart:]
 		if len(d.expDigits) <= 18 {
 			for _, c := range d.expDigits {
 				exp = exp*10 + int64(c-'0')
@@ -76,7 +106,7 @@ func parseDecNumber(src []byte) decNumber {
 		}
 		if d.sigFirst < 0 {
 			d.zero = true
-			return d
+			return d, true
 		}
 	}
 	if d.expFits {
@@ -91,23 +121,34 @@ func parseDecNumber(src []byte) decNumber {
 		}
 	}
 	if d.sigLast < 0 {
-		for j := intEnd - 1; ; j-- {
+		for j := intEnd - 1; j >= intStart; j-- {
 			if src[j] != '0' {
 				d.sigLast = j
 				break
 			}
 		}
 	}
-	return d
+	return d, true
 }
 
-// jsonNumberEqual reports whether two validated JSON number spellings agree.
-func jsonNumberEqual(a, b []byte) bool {
-	if bytesEqualString(a, ownedBytesString(b)) {
+// NumberEqual reports whether two validated RFC 8259 JSON number tokens
+// represent the exact same mathematical rational value (for example -0 == 0,
+// 100 == 1e2 == 1.00e+2, and arbitrary-precision decimals beyond float64).
+//
+// Comparisons allocate nothing for all numbers whose exponent fits in 18
+// decimal digits. Empty or malformed inputs return false without panicking.
+func NumberEqual(a, b []byte) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	if byteview.String(a) == byteview.String(b) {
 		return true
 	}
-	da := parseDecNumber(a)
-	db := parseDecNumber(b)
+	da, aok := parseDecNumber(a)
+	db, bok := parseDecNumber(b)
+	if !aok || !bok {
+		return false
+	}
 	if da.zero || db.zero {
 		return da.zero == db.zero
 	}
@@ -146,7 +187,7 @@ func decWeightEqual(a, b *decNumber) bool {
 	if aSmall {
 		return an == bn && aMag == bMag
 	}
-	return an == bn && bytesEqualString(aDigits, ownedBytesString(bDigits))
+	return an == bn && byteview.String(aDigits) == byteview.String(bDigits)
 }
 
 const decWeightTermSmallLimit uint64 = 10000000000000000000

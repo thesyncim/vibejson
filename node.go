@@ -1,12 +1,11 @@
 package vibejson
 
 import (
-	"unicode/utf16"
-	"unicode/utf8"
 	"unsafe"
 
 	"github.com/thesyncim/vibejson/document"
 	"github.com/thesyncim/vibejson/x/byteview"
+	"github.com/thesyncim/vibejson/x/jsoncmp"
 )
 
 // Node is a lightweight cursor over an Index or Value. It borrows immutable
@@ -429,44 +428,5 @@ func entryAt(entry *IndexEntry, offset uintptr) *IndexEntry {
 
 // tapeKeyEqual compares a raw key span with its decoded query.
 func tapeKeyEqual(raw []byte, flags uint8, key string) bool {
-	if flags&tapeFlagEscaped == 0 {
-		return bytesEqualString(raw[1:len(raw)-1], key)
-	}
-	raw = raw[1 : len(raw)-1]
-	ki := 0
-	for i := 0; i < len(raw); {
-		if raw[i] != '\\' {
-			if ki >= len(key) || raw[i] != key[ki] {
-				return false
-			}
-			i++
-			ki++
-			continue
-		}
-		i++
-		if raw[i] != 'u' {
-			c := decodedSimpleEscape(raw[i])
-			if ki >= len(key) || key[ki] != c {
-				return false
-			}
-			i++
-			ki++
-			continue
-		}
-		u, _ := hex4(raw, i+1)
-		i += 5
-		r := rune(u)
-		if 0xD800 <= r && r <= 0xDBFF {
-			lo, _ := hex4(raw, i+2)
-			r = utf16.DecodeRune(r, rune(lo))
-			i += 6
-		}
-		var encoded [utf8.UTFMax]byte
-		n := utf8.EncodeRune(encoded[:], r)
-		if ki+n > len(key) || !bytesEqualString(encoded[:n], key[ki:ki+n]) {
-			return false
-		}
-		ki += n
-	}
-	return ki == len(key)
+	return jsoncmp.RawStringEqualString(raw, flags, key)
 }

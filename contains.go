@@ -1,10 +1,8 @@
 package vibejson
 
 import (
-	"unicode/utf16"
-	"unicode/utf8"
-
 	"github.com/thesyncim/vibejson/document"
+	"github.com/thesyncim/vibejson/x/jsoncmp"
 )
 
 // Contains reports JSONB-compatible containment. Objects use last-key
@@ -156,7 +154,7 @@ func scalarNodesEqual(a, b Node) bool {
 	case document.Number:
 		av, _ := a.NumberBytes()
 		bv, _ := b.NumberBytes()
-		return jsonNumberEqual(av, bv)
+		return jsoncmp.NumberEqual(av, bv)
 	case document.String:
 		return stringNodesEqual(a, b)
 	default:
@@ -172,81 +170,10 @@ func stringNodesEqual(a, b Node) bool {
 	case aClean && bClean:
 		return bytesEqualString(ac, ownedBytesString(bc))
 	case aClean:
-		return tapeKeyEqual(b.Raw().Bytes(), b.Entry.Flags(), ownedBytesString(ac))
+		return jsoncmp.RawStringEqualString(b.Raw().Bytes(), b.Entry.Flags(), ownedBytesString(ac))
 	case bClean:
-		return tapeKeyEqual(a.Raw().Bytes(), a.Entry.Flags(), ownedBytesString(bc))
+		return jsoncmp.RawStringEqualString(a.Raw().Bytes(), a.Entry.Flags(), ownedBytesString(bc))
 	default:
-		return rawJSONStringEqual(a.Raw().Bytes(), a.Entry.Flags(), b.Raw().Bytes(), b.Entry.Flags())
+		return jsoncmp.RawStringEqual(a.Raw().Bytes(), a.Entry.Flags(), b.Raw().Bytes(), b.Entry.Flags())
 	}
-}
-
-// rawJSONStringEqual compares decoded content without materializing escaped
-// strings.
-func rawJSONStringEqual(a []byte, aFlags uint8, b []byte, bFlags uint8) bool {
-	aEscaped := aFlags&tapeFlagEscaped != 0
-	bEscaped := bFlags&tapeFlagEscaped != 0
-	switch {
-	case !aEscaped && !bEscaped:
-		return bytesEqualString(a[1:len(a)-1], ownedBytesString(b[1:len(b)-1]))
-	case !aEscaped:
-		return tapeKeyEqual(b, bFlags, ownedBytesString(a[1:len(a)-1]))
-	case !bEscaped:
-		return tapeKeyEqual(a, aFlags, ownedBytesString(b[1:len(b)-1]))
-	}
-
-	ai := jsonStringByteIter{Raw: a[1 : len(a)-1]}
-	bi := jsonStringByteIter{Raw: b[1 : len(b)-1]}
-	for {
-		ab, aok := ai.Next()
-		bb, bok := bi.Next()
-		if aok != bok || aok && ab != bb {
-			return false
-		}
-		if !aok {
-			return true
-		}
-	}
-}
-
-// jsonStringByteIter decodes bytes from a validated string interior.
-type jsonStringByteIter struct {
-	Raw     []byte
-	i       int
-	encoded [utf8.UTFMax]byte
-	pos     uint8
-	n       uint8
-}
-
-// Next returns the next decoded UTF-8 byte.
-func (it *jsonStringByteIter) Next() (byte, bool) {
-	if it.pos < it.n {
-		b := it.encoded[it.pos]
-		it.pos++
-		return b, true
-	}
-	if it.i == len(it.Raw) {
-		return 0, false
-	}
-	b := it.Raw[it.i]
-	if b != '\\' {
-		it.i++
-		return b, true
-	}
-	it.i++
-	if it.Raw[it.i] != 'u' {
-		b = decodedSimpleEscape(it.Raw[it.i])
-		it.i++
-		return b, true
-	}
-	u, _ := hex4(it.Raw, it.i+1)
-	it.i += 5
-	r := rune(u)
-	if 0xD800 <= r && r <= 0xDBFF {
-		lo, _ := hex4(it.Raw, it.i+2)
-		r = utf16.DecodeRune(r, rune(lo))
-		it.i += 6
-	}
-	it.n = uint8(utf8.EncodeRune(it.encoded[:], r))
-	it.pos = 1
-	return it.encoded[0], true
 }

@@ -311,7 +311,9 @@ per-operation contract and verify the exact path you depend on.
 | `github.com/thesyncim/vibejson/x/kernels` | Structural and grammar kernels | Unstable |
 | `github.com/thesyncim/vibejson/x/byteview` | Unsafe read-only byte/string views | Unstable |
 | `github.com/thesyncim/vibejson/x/floatconv` | Decimal-to-binary conversion kernel | Unstable |
+| `github.com/thesyncim/vibejson/x/jsoncmp` | Allocation-free JSON number/string comparison and escape streaming | Unstable |
 | `github.com/thesyncim/vibejson/x/jsonfields` | `encoding/json`-compatible field resolution | Unstable |
+| `github.com/thesyncim/vibejson/x/keyhash` | Object-key hashing and tape key-hash enrichment | Unstable |
 
 The `x/` packages are exported so sibling engines such as
 [vibedb](https://github.com/thesyncim/vibedb) can share the same low-level
