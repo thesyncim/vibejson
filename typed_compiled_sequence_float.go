@@ -117,8 +117,8 @@ func decodeCompiledFloat64Array3Structural(cursor *decoderCursor, node *typedNod
 	s := src[:closePosition+1]
 	if s[comma1] != ',' || s[comma2] != ',' || s[closePosition] != ']' ||
 		(int(first) != start && !cursor.structuralFirstValueGapOK()) ||
-		!structuralGapClean(s, int(comma1)+1, int(second)) ||
-		!structuralGapClean(s, int(comma2)+1, int(third)) {
+		!tape.gapClean(s, int(comma1)+1, int(second)) ||
+		!tape.gapClean(s, int(comma2)+1, int(third)) {
 		return decodeCompiledFloat64ArrayStructural(cursor, node, dst)
 	}
 	var v0, v1, v2 float64
@@ -206,7 +206,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 			return cursor.err(len(src), "unterminated array")
 		}
 		position := int(positions[token])
-		if !structuralGapClean(src, cursor.i, position) {
+		if !tape.gapClean(src, cursor.i, position) {
 			return cursor.err(cursor.i, "unexpected character in array")
 		}
 		if index != 0 {
@@ -225,7 +225,7 @@ func decodeCompiledFloat64ArrayStructural(cursor *decoderCursor, node *typedNode
 				return cursor.err(len(src), "unterminated array")
 			}
 			position = int(positions[token])
-			if !structuralGapClean(src, comma+1, position) {
+			if !tape.gapClean(src, comma+1, position) {
 				return cursor.err(comma+1, "unexpected character in array")
 			}
 		}
@@ -337,7 +337,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 			return cursor.err(len(src), "unterminated array")
 		}
 		position := int(positions[token])
-		if !structuralGapClean(src, cursor.i, position) {
+		if !tape.gapClean(src, cursor.i, position) {
 			return cursor.err(cursor.i, "unexpected character in array")
 		}
 		if index != 0 {
@@ -356,7 +356,7 @@ func decodeCompiledFloatArrayStructural[T floatValue](cursor *decoderCursor, nod
 				return cursor.err(len(src), "unterminated array")
 			}
 			position = int(positions[token])
-			if !structuralGapClean(src, comma+1, position) {
+			if !tape.gapClean(src, comma+1, position) {
 				return cursor.err(comma+1, "unexpected character in array")
 			}
 		}

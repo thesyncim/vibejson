@@ -692,7 +692,7 @@ func decodeCompiledBuiltinFloat64SliceStructural(cursor *decoderCursor, node *ty
 			return cursor.err(len(src), "unterminated array")
 		}
 		position := int(positions[token])
-		if !structuralGapClean(src, cursor.i, position) {
+		if !tape.gapClean(src, cursor.i, position) {
 			*target = values
 			return cursor.err(cursor.i, "unexpected character in array")
 		}

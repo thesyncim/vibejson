@@ -197,7 +197,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
 	}
 	_ = pos[3]
-	if !structuralGapClean(src, cursor.i, int(pos[1])) || !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), first) {
+	if !tape.gapClean(src, cursor.i, int(pos[1])) || !matchRecordFieldKey(src, uint(pos[1]), uint(pos[3]), first) {
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 0, true, 0)
 	}
 	i := int(pos[3])
@@ -264,7 +264,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
 	}
 	_ = pos[4]
-	if !structuralGapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), second) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), second) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 1, false, 0)
@@ -298,7 +298,7 @@ func (cursor *decoderCursor) decodeCompiledStructStructuralRecord(node *typedNod
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
 	}
 	_ = pos[4]
-	if !structuralGapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), third) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), third) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 2, false, 0)
@@ -348,7 +348,7 @@ field3:
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
 	}
 	_ = pos[4]
-	if !structuralGapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), fourth) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(pos[4]), fourth) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 3, false, 0)
@@ -399,7 +399,7 @@ field4:
 	}
 	_ = pos[4]
 	valPos := int(pos[4])
-	if !structuralGapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(valPos), fifth) {
+	if !tape.gapClean(src, i+1, int(pos[2])) || !matchRecordFieldKey(src, uint(pos[2]), uint(valPos), fifth) {
 		tape.index = token
 		cursor.i = i
 		return cursor.decodeCompiledStructStructuralSlow(node, dst, 4, false, 0)
@@ -418,7 +418,7 @@ field4:
 		if objClose < uint(n) && f0 == uint(valPos)+1 &&
 			c1 < arrClose && c2 < arrClose && arrClose < objClose &&
 			src[c1] == ',' && src[c2] == ',' && src[arrClose] == ']' &&
-			structuralGapClean(src, int(c1)+1, int(f1)) && structuralGapClean(src, int(c2)+1, int(f2)) &&
+			tape.gapClean(src, int(c1)+1, int(f1)) && tape.gapClean(src, int(c2)+1, int(f2)) &&
 			arrClose+1 == objClose && src[objClose] == '}' {
 			var v0, v1, v2 float64
 			var ok0, ok1, ok2 bool
