@@ -36,8 +36,9 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 			return err
 		}
 	}
-	var err error
-	if node.elem.kind == typedFloat {
+	switch node.elem.kind {
+	case typedFloat:
+		var err error
 		if node.elem.bits == 32 {
 			err = decodeCompiledFloatArray[float32](cursor, node, unsafe.Slice((*float32)(dst), node.length))
 		} else {
@@ -47,12 +48,51 @@ func (cursor *decoderCursor) decodeCompiledArray(node *typedNode, dst unsafe.Poi
 			return retagCompiledError(err, node.elem.typ)
 		}
 		return nil
+	case typedInt:
+		if node.elem.bits == 64 && node.elem.size == 8 {
+			return decodeCompiledInt64Array(cursor, node, unsafe.Slice((*int64)(dst), node.length))
+		}
+	case typedUint:
+		if node.elem.bits == 64 && node.elem.size == 8 {
+			return decodeCompiledUint64Array(cursor, node, unsafe.Slice((*uint64)(dst), node.length))
+		}
+		if node.elem.bits == 32 && node.elem.size == 4 {
+			return decodeCompiledUint32Array(cursor, node, unsafe.Slice((*uint32)(dst), node.length))
+		}
+	case typedBool:
+		if node.elem.size == 1 {
+			return decodeCompiledBoolArray(cursor, node, unsafe.Slice((*bool)(dst), node.length))
+		}
+	case typedString:
+		if node.elem.size == unsafe.Sizeof("") {
+			return decodeCompiledStringArray(cursor, node, unsafe.Slice((*string)(dst), node.length))
+		}
 	}
 	if node.decHasReceiver {
 		return cursor.decodeCompiledArrayReceivers(node, dst, replace)
 	}
 	for index, first := 0, true; ; index, first = index+1, false {
-		more, err := cursor.NextArrayElement(first)
+		var more bool
+		var err error
+		if !first {
+			src := cursor.src
+			if i := cursor.i; i < len(src) {
+				switch src[i] {
+				case ',':
+					if i+1 < len(src) && src[i+1] > ' ' {
+						cursor.i = i + 1
+						more = true
+						goto gotElem
+					}
+				case ']':
+					cursor.i = i + 1
+					cursor.depth--
+					goto gotElem
+				}
+			}
+		}
+		more, err = cursor.NextArrayElement(first)
+	gotElem:
 		if err != nil {
 			return err
 		}
